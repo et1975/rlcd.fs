@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Rlcd/Rlcd.fsproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Rlcd.Tests/Rlcd.Tests.fsproj" />
+  </Folder>
+</Solution>

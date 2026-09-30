@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/TestResults/
+*.onnx
+*.onnx.data
+*.safetensors
+*.pt
+*.pth
+*.nupkg
+*.snupkg
+.local/
+.env

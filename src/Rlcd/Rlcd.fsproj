@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>Local artifact contracts for generic Laya-compatible decision inference.</Description>
+    <PackageId>Rlcd</PackageId>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="ModelBundle.fs" />
+  </ItemGroup>
+</Project>
