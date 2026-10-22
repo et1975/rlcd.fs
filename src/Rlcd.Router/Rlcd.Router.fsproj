@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>Pure catalog and conservative selection policy for task-tier routing.</Description>
+    <PackageId>Rlcd.Router</PackageId>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Domain.fs" />
+    <Compile Include="Catalog.fs" />
+    <Compile Include="Rubric.fs" />
+    <Compile Include="Policy.fs" />
+  </ItemGroup>
+</Project>

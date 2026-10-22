@@ -3,12 +3,14 @@ namespace Rlcd.Tests
 open System
 open System.IO
 open System.Diagnostics
+open System.Reflection
 open System.Security.Cryptography
 open System.Text
 open System.Text.Json
 open System.Text.Json.Nodes
 open System.Threading
 
+open Microsoft.FSharp.Reflection
 open Xunit
 
 open Rlcd
@@ -312,6 +314,18 @@ module ModelBundleTests =
         |> ignore
 
     [<Fact>]
+    let ``configuration is a private single-case reference union`` () =
+        let wrapper = typeof<AgentConfiguration>
+        let flags = BindingFlags.Public ||| BindingFlags.NonPublic
+        Assert.True(FSharpType.IsUnion(wrapper, flags))
+        Assert.True(wrapper.IsClass)
+        let case = FSharpType.GetUnionCases(wrapper, flags) |> Assert.Single
+        let field = case.GetFields() |> Assert.Single
+        Assert.Equal(typeof<Map<string, float>>, field.PropertyType)
+        Assert.False(FSharpValue.PreComputeUnionConstructorInfo(case, flags).IsPublic)
+        Assert.Empty(wrapper.GetConstructors())
+
+    [<Fact>]
     let ``configuration retains raw temperatures and reports required clamps`` () =
         use fixture = new Fixture()
         let path = Path.Combine(fixture.Directory, "rl_agent_config.json")
@@ -323,6 +337,34 @@ module ModelBundleTests =
 
         Assert.Equal<string list>(
             [ "score:3-5"; "temperature[1]"; "temperature[2]" ],
+            AgentConfiguration.clampingRequired configuration
+        )
+
+    [<Fact>]
+    let ``configuration preserves finite temperatures and clamps only outside inclusive bounds`` () =
+        use fixture = new Fixture()
+        let path = Path.Combine(fixture.Directory, "rl_agent_config.json")
+        File.WriteAllText(
+            path,
+            """{"max_len":512,"head_max_len":192,"temperature":[0.5,5.0,-1.0],
+                "temperature_by_options":{"choice:2":0.0,"score:3-5":0.5,"noul:2":5.0}}"""
+        )
+        let configuration = AgentConfiguration.read path
+
+        Assert.Equal<Map<string, float>>(
+            Map.ofList
+                [
+                    "temperature[0]", 0.5
+                    "temperature[1]", 5.0
+                    "temperature[2]", -1.0
+                    "choice:2", 0.0
+                    "score:3-5", 0.5
+                    "noul:2", 5.0
+                ],
+            AgentConfiguration.temperatures configuration
+        )
+        Assert.Equal<string list>(
+            [ "choice:2"; "temperature[2]" ],
             AgentConfiguration.clampingRequired configuration
         )
 

@@ -6,6 +6,10 @@
   <ItemGroup>
     <Compile Include="ModelBundleTests.fs" />
     <Compile Include="BuildTests.fs" />
+    <Compile Include="QuestionTests.fs" />
+    <Compile Include="ApiTests.fs" />
+    <Compile Include="SequenceTests.fs" />
+    <Compile Include="CalibrationTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

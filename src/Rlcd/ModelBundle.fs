@@ -177,11 +177,7 @@ type BundleManifest =
         }
 
 /// Validated raw agent configuration; calibration is a separate downstream operation.
-type AgentConfiguration =
-    private
-        {
-            Temperatures: Map<string, float>
-        }
+type AgentConfiguration = private AgentConfiguration of Map<string, float>
 
 /// Local agent-configuration IO, without implicit defaults for missing calibration.
 [<RequireQualifiedAccess>]
@@ -217,17 +213,17 @@ module AgentConfiguration =
         let defaults = root |> BundleJson.property "temperature" |> defaults
         let buckets = root |> BundleJson.property "temperature_by_options" |> buckets
 
-        {
-            Temperatures = Map.ofList (defaults @ buckets)
-        }
+        AgentConfiguration (Map.ofList (defaults @ buckets))
 
     /// Return the raw temperatures using source field and option-bucket keys.
     let temperatures (configuration: AgentConfiguration) : Map<string, float> =
-        configuration.Temperatures
+        let (AgentConfiguration values) = configuration
+        values
 
     /// Identify keys that require clamping to [0.5, 5.0] during downstream calibration.
     let clampingRequired (configuration: AgentConfiguration) : string list =
-        configuration.Temperatures
+        configuration
+        |> temperatures
         |> Map.toList
         |> List.choose (fun (key, value) -> if value < 0.5 || value > 5.0 then Some key else None)
 

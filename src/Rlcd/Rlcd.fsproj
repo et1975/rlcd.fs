@@ -1,11 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <Description>Local artifact contracts for generic Laya-compatible decision inference.</Description>
+    <Description>Typed decision requests, sequence preprocessing and supplied-logit postprocessing, with local model artifact validation; no inference backend.</Description>
     <PackageId>Rlcd</PackageId>
     <Version>0.1.0</Version>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="Domain.fs" />
+    <Compile Include="Questions.fs" />
+    <Compile Include="Sequence.fs" />
     <Compile Include="ModelBundle.fs" />
+    <Compile Include="Calibration.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="THIRD-PARTY-NOTICES.md" />
+    <None Include="../../docs/Laya-LICENSE.txt" Pack="true" PackagePath="docs/Laya-LICENSE.txt" />
   </ItemGroup>
 </Project>

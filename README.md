@@ -4,19 +4,26 @@ F#/.NET foundations for **Reinforcement Learning for Calibrated Decisions
 (RLCD)**. The intended products are a reusable, domain-independent inference
 library and a separate model router.
 
-**Current status:** the repository implements local model-bundle and
-configuration validation and an offline build runner, not inference. A
-tokenizer/inference engine, native ONNX Runtime integration, model router, and
-MCP host are **planned, not shipped**. Passing the unit tests does not establish
-model parity or native certification.
+**Current status:** the repository implements typed decision-request
+construction, sequence assembly using a supplied encoder, calibrated decoding
+of supplied logits, local model-bundle validation, and a separate pure
+model-selection policy. These APIs do not run a model. The tokenizer, native ONNX inference,
+task-to-tier classification, and the MCP host are **planned, not shipped**.
+Passing the unit tests does not establish model parity or native certification.
 
 ## Repository layout
 
 | Path | Present responsibility |
 | --- | --- |
-| [src/Rlcd/](src/Rlcd/) | Packable F# library; `ModelBundle.fs` validates manifests, artifact identity, paths, tokenizer sidecar contracts, and agent configuration. |
-| [tests/Rlcd.Tests/](tests/Rlcd.Tests/) | xUnit bundle-validation and build-runner tests using synthetic fixtures; no provisioned model is needed. |
-| [build.fsx](build.fsx) | Dependency-free F#/BCL orchestration for offline restore, build, tests, packaging, and model checks. |
+| [src/Rlcd/](src/Rlcd/) | Generic typed requests, supplied-encoder sequence assembly, supplied-logit decoding, and local artifact/configuration validation. |
+| [src/Rlcd.Router/](src/Rlcd.Router/) | Pure catalog, capability, tier-distribution, and model-selection policy; consumes supplied evidence, not task text. |
+| [tests/Rlcd.Tests/](tests/Rlcd.Tests/) | xUnit request, sequence, calibration, bundle-validation, and build tests; no provisioned model is needed. |
+| [tests/Rlcd.Router.Tests/](tests/Rlcd.Router.Tests/) | xUnit catalog, probability, threshold, eligibility, and abstention tests. |
+| [docs/generic-api.md](docs/generic-api.md) | Callable generic request-construction API and example. |
+| [docs/preprocessing.md](docs/preprocessing.md) | Sequence preparation and typed answer decoding, including supplied-input contracts and evidence limits. |
+| [docs/router-policy.md](docs/router-policy.md) | Callable model-selection policy and its caller-supplied evidence boundary. |
+| [examples/GenericDecisions.fsx](examples/GenericDecisions.fsx) | Executable non-routing triage request example; outputs constructed questions, not predictions. |
+| [build.fsx](build.fsx) | FAKE targets for offline restore, build, tests, packaging, and model checks. |
 | [scripts/VerifyArtifacts.fsx](scripts/VerifyArtifacts.fsx) | Local artifact-integrity verifier with structured results; does not load ONNX. |
 | [docs/model-contract.md](docs/model-contract.md) | Model investigation, provenance, evidence limits, and unresolved certification gates. |
 | [Rlcd.slnx](Rlcd.slnx) | Library and test solution. |
@@ -28,15 +35,52 @@ model parity or native certification.
 
 No `models/` directory or runtime manifest is supplied.
 
+## APIs available now
+
+`Rlcd` provides `ChoiceOption.create`, `Question.choice`, `Question.score`, and
+`Question.boolean`, validated token budgets and truncation options, and
+`DecisionRequest.create` / `DecisionRequest.createBatch`. Constructors return
+typed validation errors and preserve option order. A batch returns all valid
+requests or indexed errors, never a partial successful batch.
+
+`Sequence.build` and `Sequence.buildBatch` assemble Laya-compatible inputs using
+a caller-supplied `ITextEncoder` and validated special token IDs. They preserve
+question/option order, pad batches, and report or reject truncation and collapsed
+options. No tokenizer implementation is supplied.
+
+`Answer.decode` converts supplied, explicitly masked logits into typed choice,
+ordinal-score, or boolean answers. It applies configured temperatures, exposes
+clamp diagnostics, and keeps answer confidence separate from entropy confidence.
+This is numerical postprocessing, not a call to a model.
+
+`Rlcd.Router.Policy.select` takes an ordered validated catalog, caller-known
+available models and generation capabilities, and an already-computed
+Economy/Balanced/Deep probability distribution. It returns a model selection or
+an explicit abstention. Fixed user choices are preserved; uncertain, truncated,
+unsupported, or ineligible evidence does not cause a substitute model selection.
+It does not yet infer those probabilities from a task or dispatch an agent.
+
+For exact signatures and examples, see the API documents above. After building:
+
+```bash
+./examples/GenericDecisions.fsx
+```
+
+The example explicitly reports `inferenceAvailable=false`.
+
 ## Prerequisites and offline boundary
 
-- **.NET SDK 10.0.302** on `PATH`. `global.json` disables roll-forward and
+- **.NET SDK 10.0.402** on `PATH`. `global.json` disables roll-forward and
   prerelease selection; another installed SDK version is not a substitute.
-- The packages in both project `packages.lock.json` files must already be
+- The packages in each project's `packages.lock.json` must already be
   provisioned locally. Direct versions are FSharp.Core 10.1.302,
   Microsoft.NET.Test.Sdk 17.14.1, xunit 2.9.3, and
   xunit.runner.visualstudio 3.1.3; their locked transitive dependencies are
   required too.
+- The build script references `Fake.Core.Target`, `Fake.IO.FileSystem`, and
+  `Fake.DotNet.Cli`, pinned to **6.1.3**, with their transitive dependencies
+  provisioned in the local NuGet cache. These are build-time dependencies,
+  not dependencies of the shipped library.
 - `HOME` must identify the existing local cache. `NuGet.Config` clears
   inherited sources and uses only `%HOME%/.nuget/packages`.
 - The executable script examples assume a Unix-like shell with `dotnet` and
@@ -46,6 +90,22 @@ Restore is deliberately offline and locked. Missing cached packages are a
 provisioning blocker, not permission to add a feed, install a tool, change
 global configuration, or download a model. NuGet auditing is disabled in the
 repository build properties; an offline build is not a vulnerability audit.
+The SDK's transitive framework-pack prefetch is disabled so these non-web
+projects do not request an unused ASP.NET Core targeting pack. Frameworks
+actually required by project or package references still need their matching
+targeting packs provisioned locally.
+
+F# Interactive resolves the script's `#r "nuget: ..."` references before any
+target runs. Its generated restore project does not inherit this repository's
+build properties. If a cold FSI restore requests an unused framework pack, use
+the same SDK setting for that invocation:
+
+```bash
+DisableTransitiveFrameworkReferenceDownloads=true ./build.fsx --help
+```
+
+This still uses the configured local package source; it does not acquire
+missing FAKE packages from the network.
 
 ## Quickstart workflow
 
@@ -53,28 +113,29 @@ Run from the repository root:
 
 ```bash
 dotnet --version
+./build.fsx --help
 ./build.fsx --list
-./build.fsx --dry-run
 ./build.fsx -t All
 ```
 
-The first command must report `10.0.302`. `--list` enumerates the targets;
-`--dry-run` prints the planned commands without executing them. `All` restores,
-builds, tests, and packs the foundation. Running `./build.fsx` with no options
-also selects `All`.
+The first command must report `10.0.402`. FAKE provides `--help` and `--list`.
+`All` restores, builds, tests, and packs the foundation. Running `./build.fsx`
+with no options also selects `All`. Invoke from this repository for initial
+offline package resolution; target commands always use the repository root.
 
 Stop on any nonzero exit rather than continuing with stale outputs.
-Build/test outputs are under project `bin/` and `obj/`; packing produces a local
-`Rlcd.0.1.0.nupkg` under `src/Rlcd/bin/Release/`. That package contains the
-current validation foundation, not the planned inference or routing API.
+Build/test outputs are under project `bin/` and `obj/`; packing produces local
+`Rlcd.0.1.0.nupkg` and `Rlcd.Router.0.1.0.nupkg` packages in their respective
+`src/<project>/bin/Release/` directories. They contain request construction,
+pre/postprocessing, validation, and pure selection APIs, not an inference backend.
 
 The equivalent direct SDK workflow is:
 
 ```bash
 dotnet restore Rlcd.slnx --configfile NuGet.Config --locked-mode
 dotnet build Rlcd.slnx -c Release --no-restore
-dotnet test tests/Rlcd.Tests/Rlcd.Tests.fsproj -c Release --no-build --no-restore
-dotnet pack src/Rlcd/Rlcd.fsproj -c Release --no-build --no-restore
+dotnet test Rlcd.slnx -c Release --no-build --no-restore
+dotnet pack Rlcd.slnx -c Release --no-build --no-restore
 ```
 
 ### Build targets
@@ -86,44 +147,43 @@ Select one case-sensitive target with `-t`. Dependencies run once per invocation
 ./build.fsx -t Build
 ./build.fsx -t Tests
 ./build.fsx -t Package
-./build.fsx -t Setup --dry-run
+./build.fsx -t Setup
 ```
 
 | Target | Behavior |
 | --- | --- |
 | `Restore` | Offline locked solution restore using the repository `NuGet.Config`. |
 | `Build` | `Restore`, then Release build with `--no-restore`. |
-| `Tests` | `Build` and its dependencies, then Release tests with `--no-build --no-restore`. |
-| `Package` | `Build` and its dependencies, then local Release pack with `--no-build --no-restore`. |
+| `Tests` | `Build` and its dependencies, then both Release test projects with `--no-build --no-restore`. |
+| `Package` | `Build` and its dependencies, then local Release packages for both libraries with `--no-build --no-restore`. |
 | `CheckModels` | Run the existing verifier with `--integrity-only`; no downloads or native certification. |
 | `Setup` | `Restore`, then `CheckModels`. Not a model acquisition step. |
 | `All` | Run `Restore`, `Build`, `Tests`, and `Package` once each. Default when no target is supplied; excludes model checks. |
 
-`Setup` and `CheckModels` fail with the currently absent model inputs. The
-verified Setup run completes Restore, then stops at CheckModels with exit `2`;
-its stdout summary reports `completed=["Restore"]`, `failedTarget="CheckModels"`,
-and `status="failed"`. The runner forwards the verifier's JSON to stderr with
-`status="blocked"`, detail `"Required local artifact is missing."`,
-`integrityVerified=false`, and `nativeCertified=false`. No downloads occur.
+`Setup` and `CheckModels` fail with the currently absent model inputs.
+`Setup` completes Restore, then CheckModels invokes the verifier, which exits
+`2` with `status="blocked"`, `integrityVerified=false`, and
+`nativeCertified=false`. FAKE reports the failed target and exits nonzero
+(`1` for this failure). No model downloads occur.
 `All` can validate the foundation without those inputs; its success must not
 be read as model readiness.
 
-`--dry-run` can accompany a target and model options; it does not validate
-package or model availability. `--list` must be used alone. No docs compiler,
-CI, model downloader, publishing, or release workflow is supplied by this
-bootstrap.
+FAKE owns target selection, dependency ordering, diagnostics, and failures.
+The former custom `--dry-run`, `--model-dir`, `--manifest`, and
+`rlcd-build-v1` JSON output contract have been removed. Use the environment
+variables below for model inputs. No docs compiler, CI, model downloader,
+publishing, or release workflow is supplied by this bootstrap.
 
 ## Models: integrity is not certification
 
 The runner resolves model inputs as follows:
 
-1. `--model-dir PATH`, otherwise `RLCD_MODELS_DIR`, otherwise
+1. `RLCD_MODELS_DIR`, otherwise
    `~/.cache/rlcd/laya-english`.
-2. `--manifest PATH`, otherwise `models/laya-english.manifest.json` relative to
+2. `RLCD_MODEL_MANIFEST`, otherwise `models/laya-english.manifest.json` relative to
    the repository root.
 
-Explicit relative model/manifest paths, including a relative
-`RLCD_MODELS_DIR`, resolve from the caller's working directory. Child commands
+Relative model/manifest environment paths resolve from the caller's working directory. Child commands
 run from the repository root, located from the build script's own directory.
 
 Both the default model bundle and the runtime manifest are **absent**. Native
@@ -136,8 +196,11 @@ candidate and remaining provenance/parity blockers.
 After separately authorized provisioning of real local inputs, use:
 
 ```bash
-./build.fsx -t CheckModels --model-dir /absolute/local/bundle --manifest /absolute/local/manifest.json
-./build.fsx -t Setup --model-dir /absolute/local/bundle --manifest /absolute/local/manifest.json
+RLCD_MODELS_DIR=/absolute/local/bundle \
+RLCD_MODEL_MANIFEST=/absolute/local/manifest.json ./build.fsx -t CheckModels
+
+RLCD_MODELS_DIR=/absolute/local/bundle \
+RLCD_MODEL_MANIFEST=/absolute/local/manifest.json ./build.fsx -t Setup
 ```
 
 Those paths are placeholders, not supplied assets or download instructions.
@@ -154,17 +217,12 @@ absent repository path.
 
 ### Output and exit rules
 
-- The build runner writes one JSON object to stdout using schema
-  `rlcd-build-v1`. `--list` returns `status="list"` and `targets`;
-  `--dry-run` returns `status="dry-run"` and `commands`. Both exit `0`.
-- Executed targets report `status="succeeded"` or `"failed"`, `exitCode`,
-  `completed` (the successfully completed target names), and `failedTarget`
-  (`null` on success). The runner stops on the first child failure and returns
-  its exit code; success exits `0`. Handled argument/path/process-start errors
-  report `status="error"`, a `detail`, and exit `2`.
-- Target progress and both stdout and stderr from subprocesses go to the
-  runner's **stderr**. In particular, CheckModels sends the verifier's JSON
-  there; the runner's stdout remains its own summary.
+- The build uses native FAKE console output: target progress, child logs,
+  dependency information, and a build summary. It is not a JSON protocol.
+  Success exits `0`; a failed target stops dependent targets and exits nonzero.
+- FAKE's internal MSBuild binary-log reader is disabled because the cached
+  reader predates SDK 10's format. Console diagnostics and failure propagation
+  remain enabled.
 - Direct `dotnet` build/test/pack commands emit ordinary tool logs, not a
   JSON protocol. Check the process exit status.
 - The verifier's `--help` prints usage to stdout and exits `0`.
@@ -185,13 +243,19 @@ See [AGENTS.md](AGENTS.md) for contributor guidance. Documentation changes are
 checked for local links, formatting, and command/claim agreement with the final
 files. There is no documentation compiler or generated documentation site.
 
-The build-target interface and explicit setup/model-check split are inspired
-by the local FastCoref.fs `build.fsx` and bootstrap documentation. FastCoref
-uses pinned FAKE 5.23.1 packages; those packages were not cached for this
-bootstrap, and no source/download approval was obtained. This runner
-therefore uses F#/BCL only rather than copying FastCoref's package acquisition,
-model download, or release flows.
+The build uses the same FAKE libraries, `Target.create` definitions, dependency
+operators, and `Fake.DotNet` helpers as the local FastCoref.fs `build.fsx`.
+FastCoref pins 5.23.1; this repository pins the locally provisioned 6.1.3.
+Only applicable targets are carried over: no source-model downloads,
+repository metadata rewrites, documentation publishing, or release flows.
 
 Laya is the behavioral/checkpoint reference, not proof of local execution or
 export lineage. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the
 existing reference revisions, attribution, and evidence limits.
+
+## License
+
+This repository is licensed under the [Apache License 2.0](LICENSE).
+Third-party attribution and provenance limits are documented in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); upstream license notices remain
+applicable to their respective materials.

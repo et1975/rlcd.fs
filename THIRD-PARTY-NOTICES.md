@@ -1,10 +1,10 @@
 # Third-party provenance and notices
 
-This is an attribution/provenance inventory for the initial Laya backend
-investigation, not a certification of model lineage or redistribution
-compliance. No third-party model weights or tokenizer files were added by this
-investigation. No upstream implementation source was copied into production
-code by this task.
+This inventory records the Laya source adaptations and model investigation.
+It is not a certification of model lineage or blanket redistribution compliance.
+No third-party model weights or tokenizer files are included. The F# adaptations
+below implement source-derived algorithms; they do not contain a Python runtime
+or copied Python implementation text.
 
 ## Laya source reference
 
@@ -17,6 +17,29 @@ code by this task.
   calibration and confidence semantics, ONNX agent boundaries, and exporter
   tensor names/dynamic axes.
 - License: <https://www.apache.org/licenses/LICENSE-2.0>.
+- Unmodified locally inspected license text: [Laya-LICENSE.txt](docs/Laya-LICENSE.txt).
+  This copy and this notice are included in the core NuGet package.
+
+### F# adaptations
+
+`src/Rlcd/Sequence.fs` adapts question/option rendering, sequence budgeting,
+marker assembly, option-collapse checks and batch collation from
+`laya/common.py` (`render_options`, `build_sequence`, `collate_items`).
+`src/Rlcd/Calibration.fs` adapts temperature buckets/clamping and confidence
+formulas from `laya/common.py`, and answer/action decoding from
+`laya/onnx_agent.py`.
+
+These are modified F# implementations of the pinned revision above. They use
+immutable typed inputs/results, supplied encoder/logit boundaries, explicit
+errors and diagnostics, and full-precision answers. In particular, missing
+option markers fail rather than silently disappear; finite temperature clamps
+are diagnosed, invalid temperatures are rejected by configuration validation,
+and output probabilities are not rounded to four decimals. Sequence processing
+checks for option collapse both before and after final clipping.
+
+The inspected source checkout has no tracked upstream `NOTICE` file.
+The license copy is not a license or provenance determination for the model
+artifacts below.
 
 The source checkout revision is distinct from both model-repository revisions
 below. Inspecting source does not establish that a community graph was exported

@@ -4,7 +4,7 @@ open System
 open System.IO
 open System.Diagnostics
 open System.Text.Json
-open System.Threading.Tasks
+open System.Threading
 
 open Xunit
 
@@ -25,56 +25,51 @@ module BuildTests =
         interface IDisposable with
             member _.Dispose() = Directory.Delete(directory, true)
 
-    type private Response =
-        {
-            ExitCode: int
-            Output: JsonElement
-            Error: string
-        }
-
-    let private startInfo workingDirectory scriptPath modelDirectory arguments =
+    let private dotnetStartInfo workingDirectory arguments =
         let start = ProcessStartInfo("dotnet")
         start.WorkingDirectory <- workingDirectory
         start.UseShellExecute <- false
         start.RedirectStandardOutput <- true
         start.RedirectStandardError <- true
-        start.Environment.Remove "RLCD_MODELS_DIR" |> ignore
 
-        modelDirectory
-        |> Option.iter (fun value -> start.Environment["RLCD_MODELS_DIR"] <- value)
-
-        for argument in [ "fsi"; "--exec"; "--"; scriptPath ] @ arguments do
+        for argument in arguments do
             start.ArgumentList.Add argument
 
         start
 
-    let private response (child: Process) =
-        let output = child.StandardOutput.ReadToEndAsync()
-        let error = child.StandardError.ReadToEndAsync()
+    let private response start =
+        task {
+            use child = Process.Start(start: ProcessStartInfo)
+            let output = child.StandardOutput.ReadToEndAsync()
+            let error = child.StandardError.ReadToEndAsync()
+            use deadline = new CancellationTokenSource(TimeSpan.FromMinutes 2.0)
 
-        if not (child.WaitForExit 120000) then
-            child.Kill true
-            child.WaitForExit()
-            failwith "Build script exceeded the two-minute test deadline."
+            try
+                do! child.WaitForExitAsync deadline.Token
+            with :? OperationCanceledException ->
+                child.Kill true
+                do! child.WaitForExitAsync()
 
-        Task.WhenAll(output, error).GetAwaiter().GetResult() |> ignore
-        let text = output.GetAwaiter().GetResult()
-        let diagnostic = error.GetAwaiter().GetResult()
-        Assert.True(not (String.IsNullOrWhiteSpace text), diagnostic)
-        use document = JsonDocument.Parse text
-        Assert.Equal("rlcd-build-v1", document.RootElement.GetProperty("schemaVersion").GetString())
-
-        {
-            ExitCode = child.ExitCode
-            Output = document.RootElement.Clone()
-            Error = diagnostic
+            let! text = output
+            let! diagnostic = error
+            Assert.False(
+                deadline.IsCancellationRequested,
+                "Child exceeded the two-minute deadline."
+            )
+            return child.ExitCode, text + diagnostic
         }
 
-    let private invoke workingDirectory scriptPath modelDirectory arguments =
-        use child =
-            Process.Start(startInfo workingDirectory scriptPath modelDirectory arguments)
+    let private invoke workingDirectory scriptPath environment arguments =
+        let start =
+            dotnetStartInfo workingDirectory ([ "fsi"; "--exec"; "--"; scriptPath ] @ arguments)
 
-        response child
+        start.Environment.Remove "RLCD_MODELS_DIR" |> ignore
+        start.Environment.Remove "RLCD_MODEL_MANIFEST" |> ignore
+
+        for key, value in environment do
+            start.Environment[key] <- value
+
+        response start
 
     let private copyRunner directory =
         for name in [ "build.fsx"; "global.json"; "NuGet.Config" ] do
@@ -82,258 +77,212 @@ module BuildTests =
 
         Path.Combine(directory, "build.fsx")
 
-    let private strings (element: JsonElement) =
-        element.EnumerateArray() |> Seq.map _.GetString() |> Seq.toList
+    let private frameworkReferences targetingPackRoot properties projectPath =
+        task {
+            let arguments =
+                [
+                    "msbuild"
+                    projectPath
+                    "-nologo"
+                    "-target:ProcessFrameworkReferences"
+                    "-getItem:FrameworkReference,PackageDownload"
+                    $"-p:NetCoreTargetingPackRoot={targetingPackRoot}"
+                ]
+                @ properties
 
-    let private targets (response: Response) =
-        response.Output.GetProperty("commands").EnumerateArray()
-        |> Seq.map (fun command -> command.GetProperty("Target").GetString())
+            let! exitCode, output = response (dotnetStartInfo repository arguments)
+            Assert.True((exitCode = 0), $"MSBuild exited {exitCode}.\n{output}")
+            use document = JsonDocument.Parse output
+            return document.RootElement.Clone()
+        }
+
+    let private itemIdentities (itemName: string) (output: JsonElement) =
+        output.GetProperty("Items").GetProperty(itemName).EnumerateArray()
+        |> Seq.map (fun item -> item.GetProperty("Identity").GetString())
         |> Seq.toList
 
-    let private commandArguments index (response: Response) =
-        let command = response.Output.GetProperty("commands")[index]
-        command.GetProperty("Arguments") |> strings
-
-    [<Fact>]
-    let ``list is a single JSON document with only supported targets`` () =
-        use fixture = new Fixture()
-        let response = invoke fixture.Directory script None [ "--list" ]
-        Assert.Equal(0, response.ExitCode)
-        Assert.Equal("list", response.Output.GetProperty("status").GetString())
-
-        Assert.Equal<string list>(
-            [ "Restore"; "Build"; "Tests"; "Package"; "CheckModels"; "Setup"; "All" ],
-            response.Output.GetProperty("targets") |> strings
-        )
-
     [<Theory>]
-    [<InlineData("Restore", "Restore")>]
-    [<InlineData("Build", "Restore,Build")>]
-    [<InlineData("Tests", "Restore,Build,Tests")>]
-    [<InlineData("Package", "Restore,Build,Package")>]
-    [<InlineData("CheckModels", "CheckModels")>]
-    [<InlineData("Setup", "Restore,CheckModels")>]
-    [<InlineData("All", "Restore,Build,Tests,Package")>]
-    let ``dry run exposes dependency order without executing`` (target: string, expected: string) =
-        let response = invoke repository script None [ "--dry-run"; "-t"; target ]
-        Assert.Equal(0, response.ExitCode)
-        Assert.Equal("dry-run", response.Output.GetProperty("status").GetString())
-        Assert.Equal<string list>(expected.Split(',') |> Array.toList, targets response)
+    [<InlineData("src/Rlcd/Rlcd.fsproj")>]
+    [<InlineData("tests/Rlcd.Tests/Rlcd.Tests.fsproj")>]
+    let ``missing framework packs request only directly referenced frameworks`` projectPath =
+        task {
+            // An empty pack root makes this independent of globally installed targeting packs.
+            use fixture = new Fixture()
+
+            let! control =
+                frameworkReferences
+                    fixture.Directory
+                    [ "-p:DisableTransitiveFrameworkReferenceDownloads=false" ]
+                    projectPath
+
+            Assert.Equal<string list>(
+                [ "Microsoft.NETCore.App" ],
+                itemIdentities "FrameworkReference" control
+            )
+
+            Assert.Contains(
+                "Microsoft.AspNetCore.App.Ref",
+                itemIdentities "PackageDownload" control
+            )
+            Assert.Contains("Microsoft.NETCore.App.Ref", itemIdentities "PackageDownload" control)
+
+            let! configured = frameworkReferences fixture.Directory [] projectPath
+
+            Assert.Equal<string list>(
+                [ "Microsoft.NETCore.App" ],
+                itemIdentities "FrameworkReference" configured
+            )
+
+            Assert.Equal<string list>(
+                [ "Microsoft.NETCore.App.Ref" ],
+                itemIdentities "PackageDownload" configured
+            )
+        }
 
     [<Fact>]
-    let ``default All uses pinned offline release commands from external cwd`` () =
-        use fixture = new Fixture()
-        let response = invoke fixture.Directory script None [ "--dry-run" ]
-        Assert.Equal(0, response.ExitCode)
-        Assert.Equal<string list>([ "Restore"; "Build"; "Tests"; "Package" ], targets response)
-
-        let expected =
-            [
-                [
-                    "restore"
-                    "Rlcd.slnx"
-                    "--locked-mode"
-                    "--configfile"
-                    Path.Combine(repository, "NuGet.Config")
-                ]
-                [ "build"; "Rlcd.slnx"; "-c"; "Release"; "--no-restore" ]
-                [
-                    "test"
-                    "tests/Rlcd.Tests/Rlcd.Tests.fsproj"
-                    "-c"
-                    "Release"
-                    "--no-build"
-                    "--no-restore"
-                ]
-                [
-                    "pack"
-                    "src/Rlcd/Rlcd.fsproj"
-                    "-c"
-                    "Release"
-                    "--no-build"
-                    "--no-restore"
-                ]
-            ]
-
-        for index, arguments in List.indexed expected do
-            Assert.Equal<string list>(arguments, commandArguments index response)
-
-        for command in response.Output.GetProperty("commands").EnumerateArray() do
-            Assert.Equal("dotnet", command.GetProperty("FileName").GetString())
-            Assert.Equal(repository, command.GetProperty("WorkingDirectory").GetString())
+    let ``help reaches FAKE instead of FSI from an external working directory`` () =
+        task {
+            use fixture = new Fixture()
+            let! exitCode, output = invoke fixture.Directory script [] [ "--help" ]
+            Assert.True((exitCode = 0), output)
+            Assert.Contains("Target Module options", output)
+            Assert.Contains("--single-target", output)
+        }
 
     [<Fact>]
-    let ``model paths preserve spaces and resolve against caller cwd`` () =
-        use fixture = new Fixture()
+    let ``list exposes the registered build targets without executing them`` () =
+        task {
+            use fixture = new Fixture()
+            let! exitCode, output = invoke fixture.Directory script [] [ "--list" ]
+            Assert.True((exitCode = 0), output)
+            Assert.Contains("targets are available", output)
 
-        let response =
-            invoke
-                fixture.Directory
-                script
-                (Some "ignored default")
-                [
-                    "-t"
-                    "CheckModels"
-                    "--dry-run"
-                    "--model-dir"
-                    "model space"
-                    "--manifest"
-                    "manifest space.json"
-                ]
+            let targets = [ "Restore"; "Build"; "Tests"; "Package"; "CheckModels"; "Setup"; "All" ]
 
-        Assert.Equal(0, response.ExitCode)
+            for target in targets do
+                Assert.Contains(target, output)
+        }
 
-        Assert.Equal<string list>(
-            [
-                "fsi"
-                "--exec"
-                Path.Combine(repository, "scripts/VerifyArtifacts.fsx")
-                "--"
-                "--integrity-only"
-                "--model-dir"
-                Path.Combine(fixture.Directory, "model space")
-                "--manifest"
-                Path.Combine(fixture.Directory, "manifest space.json")
-            ],
-            commandArguments 0 response
-        )
+    [<Fact>]
+    let ``FAKE graph keeps Package independent of Tests and orders both under All`` () =
+        task {
+            use fixture = new Fixture()
+            let info = Path.Combine(fixture.Directory, "targets.json")
+            let! exitCode, output = invoke repository script [] [ "--write-info"; info ]
+            Assert.True((exitCode = 0), output)
+            use document = JsonDocument.Parse(File.ReadAllText info)
 
-    [<Theory>]
-    [<InlineData(null)>]
-    [<InlineData("environment model space")>]
-    let ``model defaults use environment or user cache and repository manifest`` environment =
-        use fixture = new Fixture()
+            let dependencies (property: string) =
+                document.RootElement.GetProperty("targets").EnumerateArray()
+                |> Seq.map (fun target ->
+                    target.GetProperty("name").GetString(),
+                    (target.GetProperty(property).EnumerateArray()
+                     |> Seq.map (fun dependency -> dependency.GetProperty("name").GetString())
+                     |> Seq.toList))
+                |> Map.ofSeq
 
-        let response =
-            invoke
-                fixture.Directory
-                script
-                (Option.ofObj environment)
-                [ "-t"; "CheckModels"; "--dry-run" ]
+            let hardDependencies = dependencies "hardDependencies"
+            let softDependencies = dependencies "softDependencies"
 
-        let expectedDirectory =
-            if isNull environment then
-                Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".cache/rlcd/laya-english"
-                )
-            else
-                Path.Combine(fixture.Directory, environment)
-
-        let arguments = commandArguments 0 response
-        Assert.Equal(expectedDirectory, arguments[6])
-        Assert.Equal(Path.Combine(repository, "models/laya-english.manifest.json"), arguments[8])
+            Assert.Equal<string list>([], hardDependencies["Restore"])
+            Assert.Equal<string list>([ "Restore" ], hardDependencies["Build"])
+            Assert.Equal<string list>([ "Build" ], hardDependencies["Tests"])
+            Assert.Equal<string list>([ "Build" ], hardDependencies["Package"])
+            Assert.Equal<string list>([ "Package"; "Tests" ], List.sort hardDependencies["All"])
+            Assert.Equal<string list>([ "Tests" ], softDependencies["Package"])
+            Assert.Equal<string list>(
+                [ "CheckModels"; "Restore" ],
+                List.sort hardDependencies["Setup"]
+            )
+        }
 
     [<Theory>]
     [<InlineData("--unknown")>]
     [<InlineData("-t")>]
-    [<InlineData("-t|Clean")>]
-    [<InlineData("-t|all")>]
-    [<InlineData("-t|Build|-t|Tests")>]
-    [<InlineData("--list|--list")>]
-    [<InlineData("--dry-run|--dry-run")>]
-    [<InlineData("--model-dir")>]
-    [<InlineData("--model-dir|--dry-run")>]
-    [<InlineData("--model-dir||--dry-run")>]
-    [<InlineData("--model-dir|one|--model-dir|two")>]
-    [<InlineData("--manifest")>]
-    [<InlineData("--manifest|one|--manifest|two")>]
-    [<InlineData("--list|-t|Build")>]
-    [<InlineData("--list|--dry-run")>]
-    [<InlineData("Restore")>]
-    let ``invalid arguments fail as JSON before executing`` (arguments: string) =
-        let response = invoke repository script None (arguments.Split('|') |> Array.toList)
-        Assert.Equal(2, response.ExitCode)
-        Assert.Equal("error", response.Output.GetProperty("status").GetString())
-        Assert.Equal<string list>([], response.Output.GetProperty("completed") |> strings)
-        Assert.False(String.IsNullOrWhiteSpace(response.Output.GetProperty("detail").GetString()))
+    [<InlineData("-t|NoSuchTarget")>]
+    let ``invalid CLI fails without running a target`` (arguments: string) =
+        task {
+            let! exitCode, output =
+                invoke repository script [] (arguments.Split('|') |> Array.toList)
+
+            Assert.NotEqual(0, exitCode)
+            Assert.DoesNotContain("Starting target", output)
+        }
 
     [<Fact>]
-    let ``missing model provision preserves verifier failure and isolates child stdout`` () =
-        use fixture = new Fixture()
+    let ``CheckModels forwards environment paths with spaces and fails on missing inputs`` () =
+        task {
+            use fixture = new Fixture()
+            let modelDirectory = Path.Combine(fixture.Directory, "missing models")
+            let manifest = Path.Combine(fixture.Directory, "missing manifest.json")
 
-        let response =
-            invoke
-                fixture.Directory
-                script
-                None
-                [
-                    "-t"
-                    "CheckModels"
-                    "--model-dir"
-                    "missing model directory"
-                    "--manifest"
-                    "missing manifest.json"
-                ]
+            let! exitCode, output =
+                invoke
+                    fixture.Directory
+                    script
+                    [ "RLCD_MODELS_DIR", modelDirectory; "RLCD_MODEL_MANIFEST", manifest ]
+                    [ "-t"; "CheckModels" ]
 
-        Assert.Equal(2, response.ExitCode)
-        Assert.Equal("failed", response.Output.GetProperty("status").GetString())
-        Assert.Equal("CheckModels", response.Output.GetProperty("failedTarget").GetString())
-        Assert.Equal<string list>([], response.Output.GetProperty("completed") |> strings)
-        Assert.Contains("\"status\":\"blocked\"", response.Error)
-        Assert.Contains("Required local artifact is missing.", response.Error)
-
-    [<Theory>]
-    [<InlineData("All")>]
-    [<InlineData("Setup")>]
-    let ``restore failure short circuits dependent actions without network`` target =
-        use fixture = new Fixture()
-        let copiedScript = copyRunner fixture.Directory
-
-        // No solution exists in this fixture: Restore must fail before any dependency runs.
-        let response = invoke repository copiedScript None [ "-t"; target ]
-        Assert.Equal(1, response.ExitCode)
-        Assert.Equal("Restore", response.Output.GetProperty("failedTarget").GetString())
-        Assert.Equal<string list>([], response.Output.GetProperty("completed") |> strings)
-        Assert.Contains("Rlcd.slnx", response.Error)
+            Assert.NotEqual(0, exitCode)
+            Assert.Contains(modelDirectory, output)
+            Assert.Contains(manifest, output)
+            Assert.Contains("\"status\":\"blocked\"", output)
+            Assert.Contains("Required local artifact is missing.", output)
+        }
 
     [<Fact>]
-    let ``dry run needs neither a solution nor models and creates no build outputs`` () =
-        use fixture = new Fixture()
-        let copiedScript = copyRunner fixture.Directory
-        let response = invoke repository copiedScript None [ "--dry-run" ]
-        Assert.Equal(0, response.ExitCode)
-        Assert.Equal<string list>([ "Restore"; "Build"; "Tests"; "Package" ], targets response)
-        Assert.Empty(Directory.GetDirectories fixture.Directory)
-        Assert.Equal(3, Directory.GetFiles(fixture.Directory).Length)
+    let ``failed real restore stops Build in an isolated repository`` () =
+        task {
+            use fixture = new Fixture()
+            let copiedScript = copyRunner fixture.Directory
+            // No solution exists here. This exercises DotNet.restore's real failure handling.
+            let! exitCode, output = invoke repository copiedScript [] [ "-t"; "Build" ]
+            Assert.NotEqual(0, exitCode)
+            Assert.Contains("MSB1009", output)
+            Assert.Contains("Rlcd.slnx", output)
+            Assert.DoesNotContain("Starting target 'Build'", output)
+        }
 
     [<Theory>]
-    [<InlineData("Restore", 0)>]
-    [<InlineData("Setup", 2)>]
-    let ``Setup requires models even after successful offline Restore`` target expectedExit =
-        use fixture = new Fixture()
-        let copiedScript = copyRunner fixture.Directory
-        File.WriteAllText(Path.Combine(fixture.Directory, "Rlcd.slnx"), "<Solution />")
+    [<InlineData("Tests")>]
+    [<InlineData("Package")>]
+    let ``test and pack targets address the solution`` target =
+        task {
+            use fixture = new Fixture()
+            let copiedScript = copyRunner fixture.Directory
+            // Missing inputs reveal the real SDK argument without running a nested suite.
+            let! exitCode, output =
+                invoke repository copiedScript [] [ "--single-target"; "-t"; target ]
 
-        for relative in [ "scripts/VerifyArtifacts.fsx"; "src/Rlcd/ModelBundle.fs" ] do
-            let destination = Path.Combine(fixture.Directory, relative)
-            Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
-            File.Copy(Path.Combine(repository, relative), destination)
+            Assert.NotEqual(0, exitCode)
+            Assert.Contains("MSB1009", output)
+            Assert.Contains("Switch: Rlcd.slnx", output)
+        }
 
-        let response =
-            invoke
-                repository
-                copiedScript
-                None
-                [
-                    "-t"
-                    target
-                    "--model-dir"
-                    Path.Combine(Path.GetTempPath(), $"missing models {Guid.NewGuid():N}")
-                    "--manifest"
-                    Path.Combine(fixture.Directory, "missing manifest.json")
-                ]
+    [<Fact>]
+    let ``Setup fails model verification after successful offline Restore`` () =
+        task {
+            use fixture = new Fixture()
+            let copiedScript = copyRunner fixture.Directory
+            File.WriteAllText(Path.Combine(fixture.Directory, "Rlcd.slnx"), "<Solution />")
 
-        Assert.Equal(expectedExit, response.ExitCode)
+            for relative in [ "scripts/VerifyArtifacts.fsx"; "src/Rlcd/ModelBundle.fs" ] do
+                let destination = Path.Combine(fixture.Directory, relative)
+                Directory.CreateDirectory(Path.GetDirectoryName destination) |> ignore
+                File.Copy(Path.Combine(repository, relative), destination)
 
-        Assert.Equal<string list>(
-            [ "Restore" ],
-            response.Output.GetProperty("completed") |> strings
-        )
+            let models = Path.Combine(Path.GetTempPath(), $"missing {Guid.NewGuid():N}")
+            let manifest = Path.Combine(fixture.Directory, "missing manifest.json")
 
-        if expectedExit = 0 then
-            Assert.Equal("succeeded", response.Output.GetProperty("status").GetString())
-            Assert.Equal(JsonValueKind.Null, response.Output.GetProperty("failedTarget").ValueKind)
-        else
-            Assert.Equal("CheckModels", response.Output.GetProperty("failedTarget").GetString())
-            Assert.Contains("\"status\":\"blocked\"", response.Error)
+            let! exitCode, output =
+                invoke
+                    repository
+                    copiedScript
+                    [ "RLCD_MODELS_DIR", models; "RLCD_MODEL_MANIFEST", manifest ]
+                    [ "-t"; "Setup" ]
+
+            Assert.NotEqual(0, exitCode)
+            Assert.Contains("Finished (Success) 'Restore'", output)
+            Assert.Contains("\"status\":\"blocked\"", output)
+            Assert.Contains("CheckModels", output)
+        }

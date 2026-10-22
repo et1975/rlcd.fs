@@ -7,7 +7,14 @@
   `tests/Rlcd.Tests/ModelBundleTests.fs` contains its xUnit tests.
   `tests/Rlcd.Tests/BuildTests.fs` exercises the build runner.
   `scripts/VerifyArtifacts.fsx` is the local integrity-check entrypoint.
-- Generic inference, native ONNX execution, the model router, and MCP hosting
+- `src/Rlcd/Domain.fs` and `Questions.fs` construct validated generic questions,
+  budgets and requests; see `docs/generic-api.md`.
+  `Sequence.fs` uses a supplied encoder; `Calibration.fs` decodes supplied
+  logits. Their synthetic tests do not certify a tokenizer or model; see
+  `docs/preprocessing.md`.
+  `src/Rlcd.Router/` implements pure selection from supplied probabilities and
+  a caller-maintained catalog; see `docs/router-policy.md`.
+- Tokenization, native ONNX inference, task classification, and MCP hosting
   are planned, not implemented. Keep generic library code independent of
   router, provider, Copilot, and task-service concepts.
 - Consult [docs/model-contract.md](docs/model-contract.md) and
@@ -17,7 +24,7 @@
 
 ## Build and tests
 
-Use SDK **10.0.302**, stable F# 10, and `net10.0`. Warnings are errors.
+Use SDK **10.0.402**, stable F# 10, and `net10.0`. Warnings are errors.
 Run from the repository root:
 
 ```bash
@@ -26,15 +33,20 @@ Run from the repository root:
 ./build.fsx -t All
 ```
 
-`Tests` runs Restore/Build/Tests; `All` adds Package. Dependencies run once per
-invocation. These tests do not need real model files. Re-run the suite after
+`Tests` runs Restore/Build/Tests for both test projects; `All` adds packages for
+both libraries. Dependencies run once per invocation. These tests do not need
+real model files. Re-run the suite after
 implementation changes and report the observed result, not an old test count.
 Direct SDK equivalents and model options are in the README.
 
-Use `--dry-run` to inspect commands without executing them. The runner writes
-its JSON result to stdout and subprocess logs to stderr; check the exit status.
+Use FAKE's native `--help` and `--list` commands. The build uses FAKE 6.1.3
+targets, dependency operators, and DotNet helpers, not a custom runner.
+Console output is ordinary FAKE/build diagnostics, not JSON; check the exit status.
+Model inputs use `RLCD_MODELS_DIR` and `RLCD_MODEL_MANIFEST`.
 `Setup` is Restore/CheckModels, not a downloader. It fails with the absent
 default model inputs; a successful `All` does not certify native inference.
+The pinned FAKE packages must be preprovisioned locally. See the README for
+the process-local SDK setting needed if cold FSI restore prefetches unused packs.
 
 ## Change boundaries
 
@@ -48,6 +60,8 @@ default model inputs; a successful `All` does not certify native inference.
 - Keep model artifacts outside the repository. Never replace unknown hashes
   or certification results with placeholders. Integrity success is not native
   certification; real-input checks must not silently skip into success.
+- Preserve Laya adaptation attribution in `THIRD-PARTY-NOTICES.md` and the
+  upstream license in `docs/Laya-LICENSE.txt`, including their core-package copies.
 - Follow `.editorconfig`, explicit F# project compilation order, and the
   existing validation/error conventions. Add focused regression tests for
   changed behavior.
