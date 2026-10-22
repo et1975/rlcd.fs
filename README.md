@@ -25,7 +25,7 @@ Passing the unit tests does not establish model parity or native certification.
 | [examples/GenericDecisions.fsx](examples/GenericDecisions.fsx) | Executable non-routing triage request example; outputs constructed questions, not predictions. |
 | [build.fsx](build.fsx) | FAKE targets for offline restore, build, tests, packaging, and model checks. |
 | [scripts/VerifyArtifacts.fsx](scripts/VerifyArtifacts.fsx) | Local artifact-integrity verifier with structured results; does not load ONNX. |
-| [docs/model-contract.md](docs/model-contract.md) | Model investigation, provenance, evidence limits, and unresolved certification gates. |
+| [docs/model-contract.md](docs/model-contract.md) | Expected model contract, provenance, evidence limits, and native certification requirements. |
 | [Rlcd.slnx](Rlcd.slnx) | Library and test solution. |
 | [global.json](global.json) | Exact SDK selection. |
 | [Directory.Build.props](Directory.Build.props) / [Directory.Packages.props](Directory.Packages.props) | Stable F# 10, `net10.0`, warnings-as-errors, deterministic builds, and centrally pinned packages. |
@@ -169,10 +169,8 @@ Select one case-sensitive target with `-t`. Dependencies run once per invocation
 be read as model readiness.
 
 FAKE owns target selection, dependency ordering, diagnostics, and failures.
-The former custom `--dry-run`, `--model-dir`, `--manifest`, and
-`rlcd-build-v1` JSON output contract have been removed. Use the environment
-variables below for model inputs. No docs compiler, CI, model downloader,
-publishing, or release workflow is supplied by this bootstrap.
+Use the environment variables below for model inputs. No docs compiler, CI,
+model downloader, publishing, or release workflow is supplied.
 
 ## Models: integrity is not certification
 

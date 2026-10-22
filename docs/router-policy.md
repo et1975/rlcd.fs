@@ -7,8 +7,8 @@ has no reference to the generic `Rlcd` library. A later composition layer can
 adapt generic inference results without leaking core-specific types into this API.
 
 Passing these synthetic policy tests does not certify native inference,
-calibration, model-selection quality, MCP hosting, or the original G0/T5/T6 gates.
-Root solution/build integration belongs to the parent task.
+calibration, model-selection quality, or MCP hosting.
+Both libraries and their tests participate in the root solution build.
 
 ## Construction and validation
 
@@ -36,7 +36,7 @@ records. Construction/read-out goes through their qualified modules.
 `Thresholds.confidence` and `margin`, expose the corresponding validated values.
 `CatalogModel` is an immutable record of validated ID/capabilities and a `Tier`.
 
-No JSON parser or config file is supplied in this prerequisite. The catalog
+No JSON parser or config file is supplied by this library. The catalog
 version is validated by its real constructor, not by reflection serialization.
 Future configuration IO must strictly validate its own schema before constructing
 these values; private domain representations are not serialization DTOs.
@@ -108,15 +108,12 @@ are eligible, not alphabetically first `a`. If only `a` is available, it chooses
 All such IDs in the tests are illustrative, with no current model, pricing, or
 performance assertions.
 
-## Offline project-local validation
+## Offline repository validation
 
 From the repository root, using the existing SDK and local package cache:
 
 ```bash
-dotnet restore tests/Rlcd.Router.Tests/Rlcd.Router.Tests.fsproj --configfile NuGet.Config --locked-mode
-dotnet build tests/Rlcd.Router.Tests/Rlcd.Router.Tests.fsproj -c Release --no-restore
-dotnet test tests/Rlcd.Router.Tests/Rlcd.Router.Tests.fsproj -c Release --no-build --no-restore
-dotnet pack src/Rlcd.Router/Rlcd.Router.fsproj -c Release --no-build --no-restore
+./build.fsx -t All
 ```
 
-These commands address only the new projects, not root solution integration.
+This restores, builds, tests, and packages both libraries.

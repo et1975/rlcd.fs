@@ -5,10 +5,10 @@ boolean questions over textual state. This API is pure: no IO, tokenizer, model
 loading, or inference is performed. A successful construction result is **not**
 a model answer, token-fit guarantee, or native certification.
 
-This is independent preparation only. The original G0 artifact/oracle gate and
-the complete T1 acceptance gate remain open; native inference is unavailable.
+Request construction does not establish artifact integrity or independent
+tokenizer/model parity. Native inference is unavailable.
 See [the model contract](model-contract.md) for the remaining native requirements.
-The separate [sequence and decoding API](preprocessing.md) now supports
+The separate [sequence and decoding API](preprocessing.md) supports
 caller-supplied encoders and logits; construction itself remains unchanged.
 
 ## Construction API
