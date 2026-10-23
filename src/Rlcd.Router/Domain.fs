@@ -57,6 +57,33 @@ type ValidationError =
     | InvalidProbabilitySum of float
     /// Confidence or margin threshold is non-finite or outside [0,1].
     | InvalidThresholds
+    /// Task prose is null, empty, or whitespace-only.
+    | InvalidTaskText
+    /// Task prose exceeds the character bound; no truncation was performed.
+    | TaskTextTooLong of actual: int * maximum: int
+
+/// Exact nonblank task prose bounded independently of tokenizer fit.
+type TaskText = private TaskText of string
+
+/// Bounded task data, never instructions or catalog authority.
+[<RequireQualifiedAccess>]
+module TaskText =
+    /// Maximum UTF-16 code units admitted before tokenization; not a token-fit guarantee.
+    let maximumLength: int = 8192
+
+    /// Preserve accepted text exactly, rejecting absent or oversized input.
+    let create (raw: string) : Result<TaskText, ValidationError> =
+        if String.IsNullOrWhiteSpace raw then
+            Error ValidationError.InvalidTaskText
+        elif raw.Length > maximumLength then
+            Error(ValidationError.TaskTextTooLong(raw.Length, maximumLength))
+        else
+            Ok (TaskText raw)
+
+    /// Return the exact task data.
+    let value (text: TaskText) : string =
+        let (TaskText raw) = text
+        raw
 
 /// Validated model identifiers; identity is case-sensitive and never normalized.
 [<RequireQualifiedAccess>]

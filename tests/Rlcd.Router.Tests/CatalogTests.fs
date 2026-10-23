@@ -8,6 +8,45 @@ open Rlcd.Router
 
 [<Trait("Category", "Unit")>]
 module CatalogTests =
+    [<Fact>]
+    let ``revision preserves exact code units rather than replacing invalid unicode`` () =
+        let revision name =
+            [ { Id = Fixtures.id name
+                Tier = Tier.Economy
+                Capabilities = Fixtures.capabilities false 1 1 2 [ Modality.Text ] } ]
+            |> Catalog.create "router-catalog-v1"
+            |> Fixtures.valid
+            |> Catalog.revision
+        // Construct at runtime: compiler metadata encoding can replace surrogate literals.
+        let first = String([| 'a'; char 0xD800 |])
+        let second = String([| 'a'; char 0xD801 |])
+        Assert.NotEqual<string>(first, second)
+        Assert.NotEqual<string>(revision first, revision second)
+
+    [<Fact>]
+    let ``catalog revision covers order identity tier and every capability`` () =
+        let entry name tier tools prompt output context modalities =
+            { Id = Fixtures.id name
+              Tier = tier
+              Capabilities = Fixtures.capabilities tools prompt output context modalities }
+        let first = entry "a" Tier.Economy false 10 5 20 [ Modality.Text ]
+        let second = entry "b" Tier.Deep true 10 5 20 [ Modality.Text ]
+        let revision models =
+            models |> Catalog.create "router-catalog-v1" |> Fixtures.valid |> Catalog.revision
+        let original = revision [ first; second ]
+        Assert.Equal(original, revision [ first; second ])
+        Assert.NotEqual<string>("router-catalog-v1", original)
+        for changed in
+            [ [ second; first ]
+              [ { first with Id = Fixtures.id "other" }; second ]
+              [ { first with Tier = Tier.Balanced }; second ]
+              [ entry "a" Tier.Economy true 10 5 20 [ Modality.Text ]; second ]
+              [ entry "a" Tier.Economy false 11 5 20 [ Modality.Text ]; second ]
+              [ entry "a" Tier.Economy false 10 6 20 [ Modality.Text ]; second ]
+              [ entry "a" Tier.Economy false 10 5 21 [ Modality.Text ]; second ]
+              [ entry "a" Tier.Economy false 10 5 20 [ Modality.Text; Modality.Image ]; second ] ] do
+            Assert.NotEqual<string>(original, revision changed)
+
     let private model name tier capabilities =
         {
             Id = Fixtures.id name

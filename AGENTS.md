@@ -21,10 +21,13 @@
   `Api.fs` exposes `DecisionModel.Load`, `Predict`, and `PredictBatch`.
   `InferenceTests.fs` includes controlled-runtime tests and the separately
   selected `CheckInference` real-model test.
-  `src/Rlcd.Router/` implements pure selection from supplied probabilities and
-  a caller-maintained catalog; see `docs/router-policy.md`.
-- Task classification, router inference composition, and MCP hosting
-  remain planned. Keep generic library code independent of
+  `src/Rlcd.Router/` composes task-tier inference with the existing pure
+  selection policy and a caller-maintained catalog; see `docs/router-policy.md`.
+  `Routing.fs` owns pure composition/results and `Router.fs` the borrowed-model
+  adapter. `RouterTests.fs` covers controlled outcomes and real cached execution.
+  Keep `Policy.select` pure and caller-owned model lifetime explicit.
+- MCP hosting and live Copilot dispatch integration remain planned.
+  Keep generic library code independent of
   router, provider, Copilot, and task-service concepts.
 - Consult [docs/model-contract.md](docs/model-contract.md) and
   [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) before making model or

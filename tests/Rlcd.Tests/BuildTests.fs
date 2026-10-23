@@ -632,7 +632,8 @@ Target.create "FixtureAcquisition" (fun _ ->
     [<Theory>]
     [<InlineData("Tests")>]
     [<InlineData("Package")>]
-    let ``test and pack targets address the solution`` target =
+    [<InlineData("CheckInference")>]
+    let ``test inference and pack targets address the solution`` target =
         task {
             use fixture = new Fixture()
             let copiedScript = copyRunner fixture.Directory
@@ -645,6 +646,8 @@ Target.create "FixtureAcquisition" (fun _ ->
             Assert.Contains("Switch: Rlcd.slnx", output)
             if target = "Tests" then
                 Assert.Contains("Category!=RealInference", output)
+            if target = "CheckInference" then
+                Assert.Contains("Category=RealInference", output)
         }
 
     [<Fact>]

@@ -1,5 +1,8 @@
 namespace Rlcd.Router
 
+open System
+open System.Security.Cryptography
+
 /// Caller-maintained generation capabilities; metadata is not an entitlement claim.
 type Capabilities =
     private
@@ -14,6 +17,15 @@ type Capabilities =
 /// Capability validation and requirement comparisons.
 [<RequireQualifiedAccess>]
 module Capabilities =
+    let internal revisionFields (capabilities: Capabilities) =
+        [
+            string capabilities.Tools
+            string (GenerationTokens.value capabilities.MaxPrompt)
+            string (GenerationTokens.value capabilities.MaxOutput)
+            string (GenerationTokens.value capabilities.ContextWindow)
+            capabilities.Modalities |> Set.toList |> List.map string |> String.concat ","
+        ]
+
     /// Individual maxima must fit the shared context, which must allow prompt and output.
     let create tools maxPrompt maxOutput contextWindow modalities =
         if Set.isEmpty modalities then
@@ -86,6 +98,28 @@ module Catalog =
 
     /// Return the immutable configured preference order.
     let models (catalog: Catalog) : CatalogModel list = catalog.Models
+
+    /// SHA-256 content revision over schema and ordered entries, including all capabilities.
+    /// Fields are length-prefixed strings hashed as exact little-endian UTF-16 code units.
+    /// No Unicode normalization or replacement is performed.
+    let revision (catalog: Catalog) : string =
+        let fields =
+            catalog.Version
+            :: (catalog.Models
+                |> List.collect (fun model ->
+                    [ ModelId.value model.Id; string model.Tier ]
+                    @ Capabilities.revisionFields model.Capabilities))
+
+        fields
+        |> List.map (fun field -> $"{field.Length}:{field}")
+        |> String.concat ""
+        |> Seq.collect (fun character ->
+            let code = uint16 character
+            [ byte (code &&& 0xffus); byte (code >>> 8) ])
+        |> Seq.toArray
+        |> SHA256.HashData
+        |> Convert.ToHexStringLower
+        |> fun digest -> $"sha256:{digest}"
 
     /// Keep only the specified tier's available, capability-compatible entries, in order.
     let eligible tier available requirements (catalog: Catalog) : CatalogModel list =

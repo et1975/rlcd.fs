@@ -551,7 +551,7 @@ Target.create "CheckInference" (fun _ ->
                 Logger = Some "console;verbosity=detailed"
                 MSBuildParams = { options.MSBuildParams with DisableInternalBinLog = true }
             })
-        "tests/Rlcd.Tests/Rlcd.Tests.fsproj")
+        solution)
 
 Target.create "Tests" (fun _ ->
     DotNet.test

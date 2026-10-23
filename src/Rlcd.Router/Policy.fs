@@ -1,11 +1,13 @@
 namespace Rlcd.Router
 
+open Rlcd
+
 /// Explicit evidence supplied by composition. Unknown status must be represented as false.
 type EvidenceStatus =
     {
         /// Composition has established that the evidence is supported English.
         SupportedEnglish: bool
-        /// Classifier input fits its certified budget, not the generation-model context.
+        /// Classifier input fits its configured model limits, not the generation-model context.
         WithinBudget: bool
         /// No relevant classifier input was truncated.
         NotTruncated: bool
@@ -43,7 +45,7 @@ type AbstentionReason =
     | PreserveExplicitChoice of ModelId
     /// Supported English input was not established.
     | UnsupportedEnglish
-    /// Certified classifier-budget compliance was not established.
+    /// Configured classifier-budget compliance was not established.
     | OverBudgetOrUnknown
     /// Absence of input truncation was not established.
     | TruncatedOrUnknown
@@ -57,6 +59,14 @@ type AbstentionReason =
     | BelowMargin of actual: float * required: float
     /// No available, capable catalog model exists in the selected tier.
     | NoEligibleModel of Tier
+    /// Caller established that the task is outside the supported routing scope.
+    | UnsupportedScope
+    /// Caller has not established both supported English and routing scope.
+    | UnknownSupport
+    /// Generic preparation rejected input fit; preserve the complete original reason.
+    | InputRejected of PredictionError
+    /// Successful inference reported changed or lost task/rubric evidence.
+    | InputAltered of SequenceDiagnostic list
 
 /// A concrete eligible model ID or an explicit abstention; never a dispatch command.
 [<RequireQualifiedAccess>]
@@ -69,6 +79,9 @@ type SelectionDecision =
 /// Conservative pure selection over caller-supplied evidence and metadata.
 [<RequireQualifiedAccess>]
 module Policy =
+    /// Selection semantics version; configured threshold values are recorded separately.
+    let version: string = "router-selection-v1"
+
     let private evidence (status: EvidenceStatus) =
         if not status.SupportedEnglish then Error AbstentionReason.UnsupportedEnglish
         elif not status.WithinBudget then Error AbstentionReason.OverBudgetOrUnknown

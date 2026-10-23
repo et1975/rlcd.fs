@@ -8,6 +8,7 @@
     <Compile Include="CatalogTests.fs" />
     <Compile Include="RubricTests.fs" />
     <Compile Include="PolicyTests.fs" />
+    <Compile Include="RouterTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

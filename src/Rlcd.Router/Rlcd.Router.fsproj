@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <Description>Pure catalog and conservative selection policy for task-tier routing.</Description>
+    <Description>Conservative task-tier routing over generic RLCD inference and an explicit catalog.</Description>
     <PackageId>Rlcd.Router</PackageId>
     <Version>0.1.0</Version>
   </PropertyGroup>
@@ -10,5 +10,11 @@
     <Compile Include="Catalog.fs" />
     <Compile Include="Rubric.fs" />
     <Compile Include="Policy.fs" />
+    <Compile Include="Routing.fs" />
+    <Compile Include="Router.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Rlcd/Rlcd.fsproj" />
+    <InternalsVisibleTo Include="Rlcd.Router.Tests" />
   </ItemGroup>
 </Project>

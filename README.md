@@ -10,8 +10,9 @@ sequence assembly, calibrated decoding, verified local bundle loading, and
 real CPU inference through `DecisionModel.Load`, `Predict`, and `PredictBatch`.
 The pinned English bundle has been downloaded outside the repository and
 exercised on Linux ARM64 with ONNX Runtime 1.29.0.
-The router currently provides pure selection from supplied probabilities;
-task-to-tier classification and the MCP host remain **planned, not shipped**.
+The router composes task-to-tier inference with its pure catalog/selection
+policy. MCP hosting and live Copilot dispatch integration remain
+**planned, not shipped**.
 Real execution establishes callability, not independent tokenizer/numerical
 parity, export weight lineage, or routing quality.
 
@@ -20,12 +21,12 @@ parity, export weight lineage, or routing quality.
 | Path | Present responsibility |
 | --- | --- |
 | [src/Rlcd/](src/Rlcd/) | Generic typed requests, tokenization, sequence assembly, calibrated answers, verified bundle loading, and disposable CPU inference. |
-| [src/Rlcd.Router/](src/Rlcd.Router/) | Pure catalog, capability, tier-distribution, and model-selection policy; consumes supplied evidence, not task text. |
+| [src/Rlcd.Router/](src/Rlcd.Router/) | Inference-backed task-tier composition plus pure catalog, capability, probability and model-selection policy. |
 | [tests/Rlcd.Tests/](tests/Rlcd.Tests/) | Model-free contracts and controlled-runtime tests, native runtime smoke, and an explicitly selected real-model category. |
-| [tests/Rlcd.Router.Tests/](tests/Rlcd.Router.Tests/) | xUnit catalog, probability, threshold, eligibility, and abstention tests. |
+| [tests/Rlcd.Router.Tests/](tests/Rlcd.Router.Tests/) | Catalog/policy and controlled composition tests, plus an explicitly selected real-router smoke. |
 | [docs/generic-api.md](docs/generic-api.md) | Request construction, inference signatures, results, errors, capacity, cancellation, and disposal. |
 | [docs/preprocessing.md](docs/preprocessing.md) | Tokenization, sequence preparation, and typed answer decoding, including supported configurations and evidence limits. |
-| [docs/router-policy.md](docs/router-policy.md) | Callable model-selection policy and its caller-supplied evidence boundary. |
+| [docs/router-policy.md](docs/router-policy.md) | Router composition, pure policy, caller responsibilities and evidence limits. |
 | [build.fsx](build.fsx) | FAKE targets for builds, tests, packaging, explicit model acquisition/checks, real inference, and the construction-only example. |
 | [docs/model-contract.md](docs/model-contract.md) | Expected model contract, provenance, evidence limits, and native certification requirements. |
 | [Rlcd.slnx](Rlcd.slnx) | Library and test solution. |
@@ -82,7 +83,15 @@ available models and generation capabilities, and an already-computed
 Economy/Balanced/Deep probability distribution. It returns a model selection or
 an explicit abstention. Fixed user choices are preserved; uncertain, truncated,
 unsupported, or ineligible evidence does not cause a substitute model selection.
-It does not yet infer those probabilities from a task or dispatch an agent.
+`Rlcd.Router.Router.Recommend` obtains probabilities for a fixed tier question
+through a caller-loaded `DecisionModel`, then applies this same policy.
+`TaskText.create` validates nonblank text capped at 8192 UTF-16 code units;
+the caller supplies language/scope, generation requirements, and availability.
+Results include selection/abstention and available distribution, diagnostics,
+usage and model/catalog/rubric provenance. The router does not
+load or dispose that model, discover availability, or dispatch an agent.
+Caller-established supported-English scope and explicit model choices remain
+authoritative; real-model execution is not a routing-quality certificate.
 
 For exact signatures and examples, see the API documents above. Run the
 construction-only example through the build entry point:
@@ -160,7 +169,8 @@ Stop on any nonzero exit rather than continuing with stale outputs.
 Build/test outputs are under project `bin/` and `obj/`; packing produces local
 `Rlcd.0.1.0.nupkg` and `Rlcd.Router.0.1.0.nupkg` packages in their respective
 `src/<project>/bin/Release/` directories. The core includes the inference backend
-and its runtime dependency; the router includes the pure selection policy.
+and its runtime dependency; the router references the core for composition
+while retaining the pure selection API.
 Neither package includes model weights.
 
 `build.fsx` is the only approved entry point for repository restore, build,
@@ -185,7 +195,7 @@ Select a target with `-t`. Dependencies run once per invocation:
 | `UpdateLocks` | Explicit restore that reevaluates dependency requirements and updates lockfiles after intentional package changes; not part of `All`. |
 | `Build` | `Restore`, then Release build with `--no-restore`. |
 | `CheckRuntime` | `Build` and its dependencies, then the focused native version/CPU-provider smoke test; no model required. |
-| `CheckInference` | `Build` and its dependencies, then the explicit `RealInference` tests against local model inputs; missing inputs fail, never skip. |
+| `CheckInference` | `Build` and its dependencies, then the solution's core and router `RealInference` tests against local model inputs; missing inputs fail, never skip. |
 | `Tests` | `Build` and its dependencies, then both Release test projects with `--no-build --no-restore`, excluding `RealInference`. |
 | `Package` | `Build` and its dependencies, then local Release packages for both libraries with `--no-build --no-restore`. |
 | `DownloadModels` | Acquire/reuse the four revision-pinned English files outside the repository, verify identities, and publish a cache-local integrity manifest; not part of `All`. |

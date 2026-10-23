@@ -32,6 +32,23 @@ module internal Fixtures =
 [<Trait("Category", "Unit")>]
 module DomainTests =
     [<Theory>]
+    [<InlineData(null)>]
+    [<InlineData("")>]
+    [<InlineData(" \t\r\n")>]
+    let ``task text rejects absent content`` text =
+        Assert.Equal(Error ValidationError.InvalidTaskText, TaskText.create text)
+
+    [<Fact>]
+    let ``task text preserves exact bounded unicode and rejects rather than truncates`` () =
+        let raw = "  Explain café and 日本語 as English examples.\n"
+        Assert.Equal(raw, raw |> TaskText.create |> Fixtures.valid |> TaskText.value)
+        let maximum = String('x', TaskText.maximumLength)
+        Assert.Equal(maximum, maximum |> TaskText.create |> Fixtures.valid |> TaskText.value)
+        Assert.Equal(
+            Error(ValidationError.TaskTextTooLong(maximum.Length + 1, TaskText.maximumLength)),
+            TaskText.create (maximum + "x"))
+
+    [<Theory>]
     [<InlineData(typeof<ModelId>, typeof<string>)>]
     [<InlineData(typeof<GenerationTokens>, typeof<int>)>]
     let ``scalar wrappers are private single-case reference unions``
