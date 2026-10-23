@@ -1,16 +1,73 @@
-# Generic sequence preparation and answer decoding
+# Generic tokenization, sequence preparation and answer decoding
 
-These `Rlcd` APIs implement the transformations on either side of a future
+These `Rlcd` APIs implement the transformations on either side of an
 ONNX session. They do **not** load or execute a model:
 
-- `Sequence.build` / `Sequence.buildBatch` require a caller-supplied encoder.
+- `Tokenizer.read` loads the supported English tokenizer from local sidecars.
+- `Sequence.build` / `Sequence.buildBatch` accept its encoder or a caller-supplied one.
 - `Answer.decode` requires caller-supplied logits and validated calibration
   configuration.
 
 Use the [question/request API](generic-api.md) to construct inputs first.
-There is no router dependency, implemented tokenizer, `DecisionModel` facade,
-native certification, or independent model/tokenizer parity claim.
+There is no router dependency. The [DecisionModel facade](generic-api.md#inference-api)
+composes these transformations with the real native CPU session.
+Neither API claims independent selected-model tokenizer/numerical parity.
 The original [artifact and oracle requirements](model-contract.md) still apply.
+
+## Tokenizer API and supported subset
+
+```fsharp
+namespace Rlcd
+
+[<RequireQualifiedAccess>]
+module Tokenizer =
+    val read: configurationPath: string -> tokenizerPath: string -> Tokenizer
+    val encode: text: string -> tokenizer: Tokenizer -> Result<int list, TextEncodingError>
+    val encoder: tokenizer: Tokenizer -> ITextEncoder
+    val specialTokens: tokenizer: Tokenizer -> SpecialTokens
+```
+
+The first path is `tokenizer_config.json`, not `rl_agent_config.json`; the second
+is `tokenizer.json`. `Tokenizer.read` is local IO and follows the existing
+configuration-reader exception convention. It reuses the bundle validator's
+tokenizer parser. Reading these files directly does not verify manifest hashes;
+use `CheckModels` for bundle-integrity checks.
+
+The returned tokenizer is an immutable aggregate. `encode` performs no IO,
+automatic special-token insertion, or truncation. Null inputs, malformed UTF-16
+and missing vocabulary entries return `TextEncodingError.Failed`; they do not
+silently substitute replacement characters or unknown-token IDs. The
+`encoder` and `specialTokens` accessors connect it to `Sequence.build`.
+
+Supported encoding is tokenizer JSON version `1.0`, NFC normalization,
+ByteLevel pre-tokenization with `use_regex=true` and `add_prefix_space=false`,
+the GPT-2 UTF-8 byte alphabet, and ranked BPE. Vocabulary IDs and merge order
+are retained; both string-pair and two-element-array merge representations are
+accepted. Lowest rank wins, with the leftmost occurrence breaking ties.
+
+Raw added tokens are extracted before NFC normalization; normalized patterns
+and remaining text are normalized before the second matching phase. Matching
+is leftmost-longest, with supported `single_word`, `lstrip`, and `rstrip` flags.
+Added-token word boundaries use the complete Unicode **16.0.0** word-property
+set, including Alphabetic symbols outside general letter categories.
+ByteLevel letter/number segmentation is a different classification; it and NFC
+use .NET/platform Unicode data. Version parity with a particular HF runtime
+has not been established.
+
+Unsupported configurations fail explicitly. These include non-NFC normalizers,
+prefix-space mode, disabled regex splitting, active padding/truncation, dropout,
+unknown-token or byte fallback, active word affixes, unsupported pipeline
+components, and same-phase added patterns that collide after NFC. A phase
+combining an `rstrip` token with a whitespace-leading added token is also rejected
+rather than approximated. An absent decoder/post-processor or the validated
+ByteLevel/TemplateProcessing forms are supported; encoding still inserts no
+automatic structural tokens. Control IDs derive from the supplied sidecars,
+not checkpoint constants.
+
+There is no shared cache, and concurrent calls read immutable state. Encoding
+is uncapped; the current BPE rescan can be quadratic in the longest pretoken,
+and added-token matching scans configured patterns. No throughput or full
+checkpoint-compatibility claim follows from the synthetic tests.
 
 ## Sequence API
 
@@ -80,7 +137,8 @@ mutating a caller-owned array.
 
 ### Encoder and special-token contract
 
-Supply a pure, deterministic `ITextEncoder` that returns the complete encoded
+Use `Tokenizer.encoder`, or supply a pure, deterministic `ITextEncoder` that
+returns the complete encoded
 text **without automatic special tokens or truncation**. Report encoding failures
 with `Error (TextEncodingError.Failed message)`, not exceptions. Throwing violates
 this boundary contract; arbitrary encoder exceptions are not caught or converted
@@ -88,8 +146,9 @@ into successful results. Full token output is held in memory so losses can be
 detected; the sequence budget is not an encoder-work or memory limit.
 
 Special IDs must be nonnegative and mutually distinct, and mask text must be
-nonblank. Read the actual identities from compatible tokenizer sidecars when
-implementing an encoder; example or test IDs are not model defaults. Sequence
+nonblank. `Tokenizer.specialTokens` supplies identities read from its sidecars.
+For another encoder, derive them from compatible sidecars; example or test IDs
+are not model defaults. Sequence
 construction validates nonnegative encoded IDs and rejects unexpected mask IDs,
 but cannot prove vocabulary membership or tokenizer compatibility.
 
@@ -157,8 +216,9 @@ also preserves the original grouping. Columns are rectangular immutable lists:
 | `markerMask` | True for real options, false for padding |
 | `questionTypes` | Choice 0, score 1, boolean 2 |
 
-These are prepared values, not allocated ONNX tensors. A future native adapter
-must validate certified dimensions and map them to the required tensor types.
+These are prepared values, not allocated ONNX tensors. The native adapter
+reuses this collation for chunks, validates the graph/output contract, and maps
+the values to the required tensor types. Certified parity is a separate gate.
 
 ## Supplied-logit decoding API
 
@@ -235,15 +295,17 @@ not establish calibration on the caller's domain.
 
 The algorithms adapt the pinned Laya source identified in
 [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).
-Tests use synthetic lookup encoders and hand-computed logits, including overflow,
-padding, clipping/collapse and invalid-input cases. They do not execute an
-independent tokenizer or model oracle.
+Tests use synthetic tokenizer configurations, lookup encoders and hand-computed
+logits, including Unicode boundaries, overflow, padding, clipping/collapse and
+invalid-input cases. The word-property data was cross-checked against Unicode
+16.0 and Rust regex reference tables; this is property-data evidence, not a
+whole-tokenizer or model execution oracle. Exact selected-model tokenizer
+outputs still require independent parity fixtures.
 
-Run the focused tests after offline restore:
+Run these tests through the repository test target, which includes locked restore:
 
 ```bash
-dotnet test tests/Rlcd.Tests/Rlcd.Tests.fsproj -c Release --no-restore \
-  --filter 'FullyQualifiedName~SequenceTests|FullyQualifiedName~CalibrationTests'
+./build.fsx -t Tests
 ```
 
 Native inference still requires provisioned artifacts/runtime, exact tokenizer

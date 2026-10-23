@@ -1,6 +1,7 @@
 # Third-party provenance and notices
 
-This inventory records the Laya source adaptations and model investigation.
+This inventory records the Laya/tokenizer source references, Unicode data
+adaptation, and model investigation.
 It is not a certification of model lineage or blanket redistribution compliance.
 No third-party model weights or tokenizer files are included. The F# adaptations
 below implement source-derived algorithms; they do not contain a Python runtime
@@ -28,6 +29,8 @@ marker assembly, option-collapse checks and batch collation from
 `src/Rlcd/Calibration.fs` adapts temperature buckets/clamping and confidence
 formulas from `laya/common.py`, and answer/action decoding from
 `laya/onnx_agent.py`.
+`src/Rlcd/Tokenizer.fs` also references the byte alphabet, GPT-2 splitting and
+ranked-merge mechanics in `laya-ts/src/tokenizer.ts` at the same revision.
 
 These are modified F# implementations of the pinned revision above. They use
 immutable typed inputs/results, supplied encoder/logit boundaries, explicit
@@ -44,6 +47,80 @@ artifacts below.
 The source checkout revision is distinct from both model-repository revisions
 below. Inspecting source does not establish that a community graph was exported
 from that source or from the official checkpoint.
+
+## Hugging Face Tokenizers source reference
+
+The original F# tokenizer implementation uses HF Tokenizers **v0.22.1** as a
+behavioral reference for raw/normalized added-token phases, matching and strip
+semantics, byte mapping, and pre-tokenization:
+
+- <https://github.com/huggingface/tokenizers/blob/v0.22.1/tokenizers/src/tokenizer/added_vocabulary.rs>
+- <https://github.com/huggingface/tokenizers/blob/v0.22.1/tokenizers/src/pre_tokenizers/byte_level.rs>
+- Upstream license: Apache License 2.0, inspected at
+  <https://github.com/huggingface/tokenizers/blob/v0.22.1/LICENSE>.
+
+No Rust tokenizer runtime is included. This source reference is not independent
+execution evidence for the selected model's tokenizer.
+
+## Unicode word-property data
+
+`src/Rlcd/Tokenizer.fs` contains derived Unicode **16.0.0** ranges for
+`Alphabetic | Mark | Decimal_Number | Connector_Punctuation | Join_Control`.
+They are generated from these Unicode Character Database files:
+
+| Source under `https://www.unicode.org/Public/16.0.0/ucd/` | SHA-256 |
+| --- | --- |
+| `DerivedCoreProperties.txt` | `39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd` |
+| `UnicodeData.txt` | `ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f` |
+| `PropList.txt` | `53d614508e2a0b2305a8aa21cd60d993de9326cdf65993660dfcce4503548583` |
+
+The resulting 796 ranges were cross-checked across all Unicode code points
+against the Unicode 16.0 table in Rust regex **1.11.2**:
+<https://github.com/rust-lang/regex/blob/1.11.2/regex-syntax/src/unicode_tables/perl_word.rs>.
+This verifies the property set, not whole-encoder or model parity.
+
+The following notice is retained in source and in this packaged document.
+License source: <https://www.unicode.org/license.txt>, inspected 2026-10-22.
+
+```text
+UNICODE LICENSE V3
+COPYRIGHT AND PERMISSION NOTICE
+Copyright © 1991-2026 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.
+```
 
 ## FastCoref.fs source reference
 
@@ -73,7 +150,9 @@ Pinned repository locators:
 - <https://huggingface.co/convaiinnovations/laya/tree/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851>
 
 Those remote observations were not refreshed during the local investigation.
-No graph/sidecar license or NOTICE payload was locally inspected. The exact
+The selected graph and three JSON sidecars have since been acquired and their
+identities verified; see [the measured bundle hashes](docs/model-contract.md#verified-bundle-bytes).
+No separate model license or NOTICE payload was acquired in that four-file bundle. The exact
 community-export weight lineage and any additional applicable upstream
 attribution remain unverified.
 

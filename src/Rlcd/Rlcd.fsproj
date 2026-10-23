@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <Description>Typed decision requests, sequence preprocessing and supplied-logit postprocessing, with local model artifact validation; no inference backend.</Description>
+    <Description>Typed decision requests, local model integrity validation, tokenization, calibrated decoding, and CPU ONNX Runtime inference; independent model parity is not certified.</Description>
     <PackageId>Rlcd</PackageId>
     <Version>0.1.0</Version>
   </PropertyGroup>
@@ -10,7 +10,14 @@
     <Compile Include="Questions.fs" />
     <Compile Include="Sequence.fs" />
     <Compile Include="ModelBundle.fs" />
+    <Compile Include="Tokenizer.fs" />
     <Compile Include="Calibration.fs" />
+    <Compile Include="Inference.fs" />
+    <Compile Include="Api.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rlcd.Tests" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
   </ItemGroup>
   <ItemGroup>
     <None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="THIRD-PARTY-NOTICES.md" />

@@ -6,16 +6,25 @@
 - `src/Rlcd/ModelBundle.fs` is a local bundle/configuration validator.
   `tests/Rlcd.Tests/ModelBundleTests.fs` contains its xUnit tests.
   `tests/Rlcd.Tests/BuildTests.fs` exercises the build runner.
-  `scripts/VerifyArtifacts.fsx` is the local integrity-check entrypoint.
+  `build.fsx` owns the `CheckModels`, `VerifyModels`, and `Example` target logic;
+  there are no standalone verifier or example scripts.
+  `NativeRuntimeTests.fs` verifies the pinned runtime's actual native version and
+  CPU provider; `CheckRuntime` runs it without requiring model files.
+  `DownloadModels` explicitly provisions the pinned English cache and manifest.
 - `src/Rlcd/Domain.fs` and `Questions.fs` construct validated generic questions,
   budgets and requests; see `docs/generic-api.md`.
-  `Sequence.fs` uses a supplied encoder; `Calibration.fs` decodes supplied
-  logits. Their synthetic tests do not certify a tokenizer or model; see
-  `docs/preprocessing.md`.
+  `Tokenizer.fs` implements the supported English NFC/ByteLevel/BPE pipeline;
+  `Sequence.fs` uses its encoder or a supplied one. `Calibration.fs` decodes
+  supplied logits. Synthetic tests do not certify selected-model tokenizer or
+  native parity; see `docs/preprocessing.md`.
+  `Inference.fs` owns the real CPU session, tensor validation and lifetime;
+  `Api.fs` exposes `DecisionModel.Load`, `Predict`, and `PredictBatch`.
+  `InferenceTests.fs` includes controlled-runtime tests and the separately
+  selected `CheckInference` real-model test.
   `src/Rlcd.Router/` implements pure selection from supplied probabilities and
   a caller-maintained catalog; see `docs/router-policy.md`.
-- Tokenization, native ONNX inference, task classification, and MCP hosting
-  are planned, not implemented. Keep generic library code independent of
+- Task classification, router inference composition, and MCP hosting
+  remain planned. Keep generic library code independent of
   router, provider, Copilot, and task-service concepts.
 - Consult [docs/model-contract.md](docs/model-contract.md) and
   [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) before making model or
@@ -24,7 +33,8 @@
 
 ## Build and tests
 
-Use SDK **10.0.402**, stable F# 10, and `net10.0`. Warnings are errors.
+The requested SDK is **10.0.402**, with `global.json` feature-band roll-forward,
+stable F# 10, and `net10.0`. Warnings are errors.
 Run from the repository root:
 
 ```bash
@@ -35,33 +45,44 @@ Run from the repository root:
 
 `Tests` runs Restore/Build/Tests for both test projects; `All` adds packages for
 both libraries. Dependencies run once per invocation. These tests do not need
-real model files. Re-run the suite after
+real model files: `RealInference` is excluded. Run `./build.fsx -t CheckInference`
+explicitly for actual graph execution; missing inputs must fail, not skip.
+Re-run the suite after
 implementation changes and report the observed result, not an old test count.
-Direct SDK equivalents and model options are in the README.
+`build.fsx` is the only approved entry point for restore, build, tests,
+packaging, and model checks. Do not invoke SDK commands or internal verifier
+scripts directly. Model options are in the README.
 
 Use FAKE's native `--help` and `--list` commands. The build uses FAKE 6.1.3
 targets, dependency operators, and DotNet helpers, not a custom runner.
 Console output is ordinary FAKE/build diagnostics, not JSON; check the exit status.
 Model inputs use `RLCD_MODELS_DIR` and `RLCD_MODEL_MANIFEST`.
-`Setup` is Restore/CheckModels, not a downloader. It fails with the absent
-default model inputs; a successful `All` does not certify native inference.
-The pinned FAKE packages must be preprovisioned locally. See the README for
-the process-local SDK setting needed if cold FSI restore prefetches unused packs.
+`Setup` is Restore/CheckModels, not a downloader. It fails when the selected
+inputs are missing or invalid. `DownloadModels` is explicit and outside `All`;
+its default manifest lives in the model cache. Neither successful `All` nor
+`CheckInference` establishes independent tokenizer/model parity.
+FSI restores the pinned FAKE packages from configured NuGet sources when they
+are not cached. See the README for the process-local SDK setting needed if
+cold FSI restore prefetches unused framework packs.
 
 ## Change boundaries
 
-- Preserve the existing `src/`, `tests/`, `scripts/`, and `docs/` structure.
+- Preserve the existing `src/`, `tests/`, and `docs/` structure; keep repository
+  tooling in `build.fsx` targets.
   Keep dependency versions in `Directory.Packages.props` and preserve locked
-  restore; do not regenerate lock files incidentally.
-- Preserve `NuGet.Config` and its offline-only cache source. Missing packages,
-  model bytes, a runtime manifest, native ONNX Runtime, or an independent oracle
-  are blockers to report, not permission for network installation, downloads,
-  feed changes, or global configuration changes.
+  restore. For intentional dependency changes, use `./build.fsx -t UpdateLocks`
+  and review the resulting lockfile changes; do not regenerate them incidentally.
+- Use normal NuGet configuration and sources; do not recreate the removed
+  repository-local offline-only `NuGet.Config` or change global feed settings.
+  Dependency restore remains pinned and locked. Model acquisition is a separate
+  explicit build operation, not an inference-time download or permission to
+  install an unrelated reference toolchain.
 - Keep model artifacts outside the repository. Never replace unknown hashes
   or certification results with placeholders. Integrity success is not native
   certification; real-input checks must not silently skip into success.
 - Preserve Laya adaptation attribution in `THIRD-PARTY-NOTICES.md` and the
   upstream license in `docs/Laya-LICENSE.txt`, including their core-package copies.
+  Retain the Unicode License V3 notice for the tokenizer's derived word-property data.
 - Follow `.editorconfig`, explicit F# project compilation order, and the
   existing validation/error conventions. Add focused regression tests for
   changed behavior.

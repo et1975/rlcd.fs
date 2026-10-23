@@ -278,6 +278,15 @@ module SequenceBatch =
     /// Return Laya question-type codes: choice=0, score=1, boolean/noul=2.
     let questionTypes (batch: SequenceBatch) : int list = batch.QuestionTypes
 
+    // Reuse the same collation for bounded native calls, without re-encoding text.
+    let internal chunks padding size (batch: SequenceBatch) =
+        TokenPosition.create 0
+        |> Result.map (fun zero ->
+            batch.Sequences
+            |> List.concat
+            |> List.chunkBySize size
+            |> List.map (fun sequences -> create padding zero [ sequences ]))
+
 /// Pure rendering, budget enforcement, sequence assembly and batch collation.
 /// Adapted from Laya common.py at 9d955671415fc19f069b9cc998928075c1f255ec:
 /// render_options (106-132), build_sequence (135-207), collate_items (528-565).

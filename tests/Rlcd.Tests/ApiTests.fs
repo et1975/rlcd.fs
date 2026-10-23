@@ -1,6 +1,7 @@
 namespace Rlcd.Tests
 
 open System
+open System.IO
 
 open Xunit
 
@@ -8,6 +9,24 @@ open Rlcd
 
 [<Trait("Category", "Unit")>]
 module ApiTests =
+    [<Fact>]
+    let ``model load reports missing local artifacts without acquiring anything`` () =
+        let directory = Path.Combine(Path.GetTempPath(), $"rlcd-absent-{Guid.NewGuid():N}")
+        match DecisionModel.Load(directory, Path.Combine(directory, "manifest.json")) with
+        | Error(ModelLoadError.MissingArtifact _) -> ()
+        | other -> failwithf "Expected missing artifact, got %A" other
+
+    [<Fact>]
+    let ``model load reports malformed manifest as invalid bundle`` () =
+        let path = Path.GetTempFileName()
+        try
+            File.WriteAllText(path, "{}")
+            match DecisionModel.Load(Path.GetDirectoryName path, path) with
+            | Error(ModelLoadError.InvalidBundle _) -> ()
+            | other -> failwithf "Expected invalid bundle, got %A" other
+        finally
+            File.Delete path
+
     let private ok = function
         | Ok value -> value
         | Error errors -> failwithf "Expected valid construction, got %A" errors

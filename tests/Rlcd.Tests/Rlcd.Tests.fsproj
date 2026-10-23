@@ -5,11 +5,14 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="ModelBundleTests.fs" />
+    <Compile Include="TokenizerTests.fs" />
     <Compile Include="BuildTests.fs" />
+    <Compile Include="NativeRuntimeTests.fs" />
     <Compile Include="QuestionTests.fs" />
     <Compile Include="ApiTests.fs" />
     <Compile Include="SequenceTests.fs" />
     <Compile Include="CalibrationTests.fs" />
+    <Compile Include="InferenceTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

@@ -585,7 +585,7 @@ module ModelBundleTests =
     [<Theory>]
     [<InlineData("value")>]
     [<InlineData("property")>]
-    let ``verifier reports structured nonzero errors for malformed Unicode`` (location: string) =
+    let ``CheckModels reports structured nonzero errors for malformed Unicode`` (location: string) =
         task {
             use fixture = new Fixture()
 
@@ -600,7 +600,7 @@ module ModelBundleTests =
 
             let script =
                 Path.GetFullPath(
-                    Path.Combine(__SOURCE_DIRECTORY__, "../../scripts/VerifyArtifacts.fsx")
+                    Path.Combine(__SOURCE_DIRECTORY__, "../../build.fsx")
                 )
 
             let start =
@@ -612,6 +612,8 @@ module ModelBundleTests =
                 )
 
             start.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] <- "1"
+            start.Environment["RLCD_MODELS_DIR"] <- fixture.Directory
+            start.Environment["RLCD_MODEL_MANIFEST"] <- manifestPath
 
             for argument in
                 [
@@ -619,10 +621,8 @@ module ModelBundleTests =
                     "--exec"
                     "--"
                     script
-                    "--model-dir"
-                    fixture.Directory
-                    "--manifest"
-                    manifestPath
+                    "-t"
+                    "CheckModels"
                 ] do
                 start.ArgumentList.Add argument
 
@@ -635,13 +635,16 @@ module ModelBundleTests =
                 do! child.WaitForExitAsync timeout.Token
             with :? OperationCanceledException ->
                 child.Kill(true)
-                failwith "Verifier process exceeded its safety deadline."
+                do! child.WaitForExitAsync()
 
             let! output = output
             let! errors = errors
-            Assert.Equal(2, child.ExitCode)
-            Assert.True(String.IsNullOrWhiteSpace errors, errors)
-            use document = JsonDocument.Parse output
+            Assert.False(timeout.IsCancellationRequested, "Model target exceeded its safety deadline.")
+            Assert.True((child.ExitCode = 1), output + errors)
+            let json =
+                output.Split('\n')
+                |> Array.find (fun line -> line.StartsWith("{", StringComparison.Ordinal))
+            use document = JsonDocument.Parse json
             Assert.Equal("blocked", document.RootElement.GetProperty("status").GetString())
             Assert.False(document.RootElement.GetProperty("integrityVerified").GetBoolean())
             Assert.False(document.RootElement.GetProperty("nativeCertified").GetBoolean())

@@ -2,51 +2,74 @@
 
 ## Status and evidence boundary
 
-**Unverified metadata — not a certified or loadable bundle.**
+**Verified local integrity and real CPU execution; independent parity is not certified.**
 
-No model graph, tokenizer sidecars, official checkpoint, or independent
-tokenizer/model oracle is supplied by this repository. Native certification
-requires verified local artifacts and independent execution evidence.
+The selected community English graph and three sidecars have been acquired
+into `~/.cache/rlcd/laya-english`, verified, and exercised through
+`DecisionModel.Load`, `PredictBatch`, and `Predict` on Linux ARM64 with ONNX
+Runtime 1.29.0 / CPUExecutionProvider. No model files are committed or packaged.
+The official checkpoint and independent tokenizer/model oracle are not provisioned.
 
-The default runtime manifest path is `models/laya-english.manifest.json`;
-no manifest is supplied. Its schema is defined by the bundle validator.
+`DownloadModels` creates `laya-english.manifest.json` inside the selected cache.
+`RLCD_MODELS_DIR` overrides the cache and `RLCD_MODEL_MANIFEST` overrides the
+manifest read by checks. The schema is defined by the bundle validator.
 Missing hashes, fixture outputs, or certification results must not be replaced
 with invented values, empty-string hashes, or all-zero placeholders.
 
-There are three distinct evidence levels:
+Keep these evidence levels separate:
 
 1. **Reported published metadata:** pinned Hub tree/card/config/LFS information.
-   These observations have not been independently revalidated against local
-   artifact bytes.
-2. **Source observations:** pinned source checkout revisions and implementation
-   details. Source inspection does not establish runtime behavior.
-3. **Unverified artifact properties:** local model bytes, graph contents/native
-   execution, independent tokenizer IDs/sequences/logits, exact export weight
-   lineage, dynamic-shape behavior, and performance.
+   Exporter parity and license metadata remain publisher reports.
+2. **Verified local integrity:** actual sizes and hashes below, including
+   sidecar Git-blob identities checked against the pinned repository tree.
+3. **Observed native callability:** the explicit `CheckInference` test loads the
+   graph, predicts all question kinds and batched states, checks finite normalized
+   answers/order/provenance, reuses the session, and disposes it. This is not a
+   comparison against an independent implementation.
+4. **Unverified certification:** independent token IDs/sequences/logits,
+   official-checkpoint weight lineage, comprehensive dynamic-shape coverage,
+   real mid-kernel cancellation timing, performance and routing quality.
 
 Neither a model card nor a matching configuration proves numerical parity.
 Reference source code alone is not a runnable, provisioned reference oracle.
 
 ## Selected published candidate
 
-The following values are **reported published metadata**, not locally measured
-artifact properties or independently revalidated publisher claims:
+Published source identity and the locally verified graph identity:
 
 | Property | Value |
 | --- | --- |
 | Repository | `mariojcr/laya-onnx` |
 | Revision | `aeebb05497cc473360caf4de1653107cf08d6b10` |
 | Graph | `english/laya.onnx` |
-| Published size | `1688711336` bytes |
-| Published LFS SHA-256 | `ce529df16bae1488504f9e5bf5120112e80a36076d16624df7703a7679d1996e` |
+| Verified size | `1688711336` bytes |
+| Verified SHA-256, matching published LFS identity | `ce529df16bae1488504f9e5bf5120112e80a36076d16624df7703a7679d1996e` |
 | Sidecars | `english/tokenizer.json`, `english/tokenizer_config.json`, `english/rl_agent_config.json` |
-| Sidecar SHA-256 | Unknown; no local sidecar bytes inspected |
+| Sidecar SHA-256 | Locally measured; see below |
 | Publisher claims | FP32, opset 18, inline weights, dynamic dimensions, parity on two shapes using ORT 1.29 |
 | Card license | Apache-2.0; reported metadata, not a local artifact license audit |
 
 Pinned source locator:
 <https://huggingface.co/mariojcr/laya-onnx/tree/aeebb05497cc473360caf4de1653107cf08d6b10/english>.
-This link is provenance, not an instruction or authorization to download.
+This link records provenance. The explicit `DownloadModels` target implements
+the separately approved acquisition; inference never downloads missing files.
+
+### Verified bundle bytes
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `laya.onnx` | 1688711336 | `ce529df16bae1488504f9e5bf5120112e80a36076d16624df7703a7679d1996e` |
+| `tokenizer.json` | 3583228 | `6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30` |
+| `tokenizer_config.json` | 124 | `2dc9a079ca6fca477b0f69d291eb9464be51d0d1e1f7753095b5c85719cf9341` |
+| `rl_agent_config.json` | 745 | `ae287b56bbcf5f8c4f4541ae9dfd00c914c4c48b940b8398c3058af37ba92bbd` |
+
+The acquisition checks sidecar Git-blob SHA-1 values
+`2f4d8583e507b7466d2490e2d6c045647a822698`,
+`8e705ec8ffe005917120c14d5b530edce3221217`, and
+`3e4fcbf12cf36164ce18a1398aa9f35f58375ae0`, respectively.
+These hash `"blob <length>\0" + bytes`; they are not file SHA-256 values.
+The manifest records the actual SHA-256 values above. Repeated acquisition
+reuses verified files without fetching them again.
 
 The authoritative English checkpoint candidate is
 `convaiinnovations/laya@55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851`.
@@ -57,10 +80,15 @@ relationship between those weights and the selected community export remains
 
 ## Expected tokenizer and sequence behavior
 
-Reported tokenizer metadata describes an NFC-normalized ByteLevel BPE pipeline
+The acquired tokenizer describes an NFC-normalized ByteLevel BPE pipeline
 with `add_prefix_space=false`, `use_regex=true`, and added tokens including
 whitespace runs with normalization/strip flags. Support must be derived from the
 pinned sidecars and unknown tokenizer schemas rejected explicitly.
+
+The repository implements a supported NFC/ByteLevel/BPE subset; see the
+[tokenizer API and limits](preprocessing.md). Synthetic mechanism tests and
+Unicode word-property table checks are not certification of the selected
+checkpoint's exact output IDs, even though the real sidecars load successfully.
 
 The reported CLS/SEP/PAD/MASK IDs are `50281/50282/50283/50284`. These are
 cross-check expectations only: derive and validate the actual IDs from the
@@ -88,7 +116,7 @@ These are source observations, not execution results against the selected
 tokenizer. FastCoref's RoBERTa/Longformer byte-BPE implementation is architectural
 prior art, not a ModernBERT tokenizer oracle or a drop-in replacement.
 
-## Expected graph contract, pending local certification
+## Enforced graph interface, pending independent certification
 
 The locally inspected `scripts/export_onnx.py:49-116` names the following
 inputs/outputs, requests opset 18, and declares dynamic axes. It uses a dummy
@@ -105,15 +133,19 @@ does not establish what is inside the separately published graph.
 | `logits` | float32 | `[questions, option_count]` |
 | `act_logits` | float32 | `[questions, 2]` |
 
-The eventual loader/certification path must validate file identity, names,
-element types, ranks, dimensions, marker counts, finite outputs, token limits,
-operators, and external tensor references. Reject unknown/custom operators and
-unapproved external paths; never execute artifact-supplied code.
+The loader verifies file identity and the declared manifest contract, then checks
+actual native metadata names, element types, ranks and dynamic dimensions
+(`act_logits` has fixed width two). Prediction validates actual output shapes,
+counts and finite values, including padded values. Sequence preparation tracks
+real markers and token limits. The manifest disallows custom operator libraries
+and external data; the loader does not register artifact-provided executable code.
+These checks are not a comprehensive independent graph/operator audit.
 
 The publisher's ORT version is not proof of a compatible .NET package or
-working target-platform native assets. Actual CPU loading and dynamic shapes
-must be exercised, including question counts, option counts, and sequence
-lengths different from the export sample.
+working target-platform native assets. Actual Linux ARM64 CPU loading and
+execution have now passed, including heterogeneous question/option counts and
+sequence lengths beyond the export sample. Broader shape/limit coverage and
+other platforms still require execution evidence.
 
 ## Independent oracle requirements
 
@@ -143,19 +175,24 @@ After explicit offline provisioning, independent fixtures should record:
 
 The bundle validator supports `laya-decision-v1`; its concrete JSON shape is
 defined in [ModelBundle.fs](../src/Rlcd/ModelBundle.fs).
-Keep discovery metadata separate from loadable certification:
+Keep loadable integrity metadata separate from certification evidence:
 
 - An unverified metadata record may state the published revision/path/size/hash
   and unknown local hashes, but must be unmistakably non-loadable.
-- A certified runtime manifest must bind each required graph/sidecar to an
-  actual verified hash, with tokenizer/config identity, tensor contract,
-  precision, tested shapes/limits, and independent evidence provenance.
-- A loader must fail closed for unverified metadata and missing required
-  artifacts. Explicit real-artifact tests must not silently skip to success.
+- A loadable manifest binds every required graph/sidecar to an actual verified
+  hash and declares tensor types, precision and limits. The acquired manifest
+  has `sourceRevision=null` and `testedShapes=[]`: neither invents export lineage
+  nor treats smoke execution as certification. Loading does not require an
+  independent-oracle certificate.
+- Certification additionally needs independently verified shapes/limits and
+  evidence provenance. Missing artifacts or hash/schema/contract mismatches
+  fail loading. Explicit real-artifact tests must not silently skip to success.
 - Source-file SHA-256 hashes and Git commit/blob IDs are not artifact hashes.
 
-**Certification remains unavailable:** artifact integrity does not establish
-native execution or independent tokenizer/model parity; export weight lineage
-is also unresolved. No downloads, installations, conversion, or acquisition
-workflows are authorized by this document. Explicitly approved provisioning and
-artifact-baseline decisions are required before native certification.
+**Certification remains unavailable:** integrity and real callability are
+established, but independent tokenizer/model parity and export weight lineage
+remain unresolved. `VerifyModels` therefore reports blocked after successful
+integrity checks; `CheckInference` separately tests real execution.
+Runtime/model acquisition is already approved and implemented. Installing
+Python/Torch or another reference toolchain, conversion, and any alternative
+artifact-baseline decision remain separate scope decisions.

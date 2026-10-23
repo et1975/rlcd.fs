@@ -108,12 +108,13 @@ are eligible, not alphabetically first `a`. If only `a` is available, it chooses
 All such IDs in the tests are illustrative, with no current model, pricing, or
 performance assertions.
 
-## Offline repository validation
+## Repository validation
 
-From the repository root, using the existing SDK and local package cache:
+From the repository root, using the pinned SDK and configured NuGet sources:
 
 ```bash
 ./build.fsx -t All
 ```
 
-This restores, builds, tests, and packages both libraries.
+This restores, builds, tests, and packages both libraries. `build.fsx` is the
+only approved build entry point; use `-t Tests` when packaging is not needed.

@@ -1,4 +1,4 @@
-# Generic question and request construction
+# Generic decisions: construction and inference
 
 `Rlcd` constructs and validates domain-independent choice, ordinal-score, and
 boolean questions over textual state. This API is pure: no IO, tokenizer, model
@@ -6,10 +6,12 @@ loading, or inference is performed. A successful construction result is **not**
 a model answer, token-fit guarantee, or native certification.
 
 Request construction does not establish artifact integrity or independent
-tokenizer/model parity. Native inference is unavailable.
-See [the model contract](model-contract.md) for the remaining native requirements.
-The separate [sequence and decoding API](preprocessing.md) supports
-caller-supplied encoders and logits; construction itself remains unchanged.
+tokenizer/model parity. The [inference API](#inference-api) below loads a verified
+local bundle and executes the real CPU backend.
+See [the model contract](model-contract.md) for the remaining certification requirements.
+The separate [tokenization, sequence and decoding API](preprocessing.md) supports
+the included tokenizer, caller-supplied encoders and supplied logits;
+construction itself remains unchanged.
 
 ## Construction API
 
@@ -167,27 +169,27 @@ with no successful subset. Empty and null batches are errors. Questions/options
 are individually smart-constructed before they enter a request; callers must
 handle those constructor errors too, rather than silently dropping failed values.
 
-## Executable example
+## Build-target example
 
-From the repository root, using the already provisioned SDK and restored local
+From the repository root, using the already provisioned SDK and local
 packages:
 
 ```bash
-dotnet build src/Rlcd/Rlcd.fsproj -c Release --no-restore
-./examples/GenericDecisions.fsx
-./examples/GenericDecisions.fsx --state 'The customer cannot access paid features.'
+./build.fsx -t Example
+RLCD_EXAMPLE_STATE='The customer cannot access paid features.' ./build.fsx -t Example
 ```
 
-[GenericDecisions.fsx](../examples/GenericDecisions.fsx) references only the built
-core assembly, with no NuGet directive or network access. It constructs customer
+[build.fsx](../build.fsx) loads the core construction sources for `Example`;
+no prebuilt library or model is needed. It constructs customer
 triage questions for category (choice), urgency (score), and follow-up (boolean).
-It emits JSON with `status="constructed"`, `inferenceAvailable=false`, the exact
+It emits a compact JSON line amid FAKE logs with `status="constructed"`,
+`inferenceAvailable=false`, the exact
 state, questions/options, budgets, and policy. These are **request descriptions,
-not model answers**. Invalid state or arguments emit an error description and
-exit 2; valid construction exits 0. Build first so the referenced assembly is
-current.
+not model answers**. Invalid state emits an error description and fails the target
+with exit `1`; valid construction exits `0`. Unset `RLCD_EXAMPLE_STATE` selects
+the sample; an explicitly empty or whitespace-only value is invalid.
 
-Here is a minimal construction example; the executable example above expands
+Here is a minimal construction example; the build target above expands
 this same pattern to all three question kinds:
 
 ```fsharp
@@ -210,13 +212,153 @@ match request with
 | Error errors -> printfn "Invalid request: %A" errors
 ```
 
-The unit tests use synthetic text only:
+The unit tests use synthetic text only and run with the repository test target:
 
 ```bash
-dotnet test tests/Rlcd.Tests/Rlcd.Tests.fsproj -c Release --no-restore \
-  --filter 'FullyQualifiedName~QuestionTests|FullyQualifiedName~ApiTests'
+./build.fsx -t Tests
 ```
 
 Rendering, sequence assembly and supplied-logit decoding are documented in
-[preprocessing.md](preprocessing.md). Native inference, a tokenizer implementation,
-model-specific compatibility and independent oracle parity remain unavailable.
+[preprocessing.md](preprocessing.md), including the supported tokenizer.
+These standalone transformations remain usable without native inference.
+
+## Inference API
+
+`DecisionModel` owns one real CPU ONNX Runtime session. There is no router
+dependency, public fake backend, implicit download, or arbitrary-graph loader.
+The following are signature-form declarations, not a standalone F# script:
+
+```fsharp
+type DecisionModel =
+    interface System.IDisposable
+    interface System.IAsyncDisposable
+    static member Load:
+        modelDirectory: string * manifestPath: string ->
+            Result<DecisionModel, ModelLoadError>
+    member Predict:
+        request: DecisionRequest * cancellationToken: System.Threading.CancellationToken ->
+            System.Threading.Tasks.Task<Result<DecisionResult, PredictionError>>
+    member PredictBatch:
+        requests: DecisionRequest list * cancellationToken: System.Threading.CancellationToken ->
+            System.Threading.Tasks.Task<Result<DecisionResult list, PredictionError>>
+
+[<RequireQualifiedAccess>]
+module DecisionResult =
+    val answers: result: DecisionResult -> Answer list
+    val diagnostics: result: DecisionResult -> SequenceDiagnostic list list
+    val usage: result: DecisionResult -> PredictionUsage
+    val provenance: result: DecisionResult -> ModelProvenance
+
+type PredictionUsage =
+    { QuestionCount: int
+      InputTokens: int
+      PaddedTokens: int
+      NativeRuns: int }
+
+type ModelProvenance =
+    { BundleId: string
+      GraphSha256: string
+      ArtifactHashes: (string * string) list
+      RuntimeVersion: string
+      ExecutionProvider: string }
+```
+
+`Load` is synchronous, noncancellable local IO/native construction. It validates
+the manifest, every artifact's size/hash, supported tokenizer/calibration
+configuration, and exact native input/output names, types, ranks and dimensions.
+Keep the input files immutable during loading; this is not a filesystem sandbox.
+Successful loading establishes that those inputs can be used by this backend,
+not independent parity or official-checkpoint weight equivalence.
+
+Pass an explicit cancellation token to prediction (`CancellationToken.None`
+when none is needed). Both methods return a `Task<Result<_, PredictionError>>`.
+They preserve request, question and option order, including reused question IDs
+across different requests. The whole batch is prepared before the first native
+run. A bad later request makes zero native runs; a failed later chunk discards
+all accumulated answers, never returning partial success.
+
+### Results and bounds
+
+Each `DecisionResult` is an immutable aggregate. Answers use the existing
+choice, ordinal-score and boolean semantics described in
+[preprocessing.md](preprocessing.md). Sequence diagnostics are grouped in
+question order; calibration diagnostics remain on each `Answer`.
+Provenance reports verified hashes, bundle identity, actual runtime version and
+the selected CPU provider, not a certification flag.
+
+Usage is per request: `InputTokens` sums assembled, unpadded question lengths
+after any diagnosed truncation; `PaddedTokens` sums full native chunk row widths,
+**not just added padding**. `NativeRuns` counts chunks touching the request.
+A shared chunk counts for every participating request, so those counts are
+not globally additive.
+
+The current limits are one active call per model, **64 requests**, **128 total
+questions**, and native chunks of at most **8 rows**. Another concurrent call
+immediately returns `CapacityExceeded("activeCalls", 1)`; there is no queue.
+Model budget ceilings are sequence/head/per-option **512/192/48**.
+These bound admitted calls and native tensors, not the work/memory of encoding
+arbitrarily long input text. The synchronous tokenizer is not preemptible.
+CPU execution is sequential, with one inter-op thread and at most four intra-op
+threads. No performance or latency guarantee is implied.
+
+### Cancellation and resource lifetime
+
+Caller cancellation returns `Error PredictionError.Cancelled`, not a cancelled
+task. Native work receives termination through `RunOptions.Terminate`.
+Cancellation during synchronous preparation is observed when preparation
+returns; an individual tokenizer call cannot be interrupted.
+The implementation awaits its admitted worker and disposes per-call tensors,
+outputs, run options, registrations and linked token sources.
+
+`IDisposable.Dispose` immediately closes admission and requests cancellation.
+If idle, it releases the session before returning. If a call is active, that
+call owns cleanup and returns `Disposed` on normal shutdown.
+**`IAsyncDisposable.DisposeAsync` is the joining operation**: await it when the
+session must be released before proceeding. Subsequent predictions return
+`Disposed`; repeated disposal does not release the session twice.
+Cleanup exceptions are failures, not proof of successful release.
+A recoverable native run failure does not itself dispose the model.
+
+### Typed failures
+
+Both error unions require qualified case access:
+
+```fsharp
+type ModelLoadError =
+    | InvalidArgument of field: string
+    | MissingArtifact of path: string
+    | InvalidBundle of message: string
+    | IncompatibleModel of details: string list
+    | NativeFailure of message: string
+    | IoFailure of message: string
+
+type PredictionError =
+    | InvalidRequests of ValidationError list
+    | ModelLimitExceeded of requestIndex: int * field: string * requested: int * maximum: int
+    | CapacityExceeded of resource: string * maximum: int
+    | SequenceFailure of SequenceError list
+    | InvalidOutput of details: string list
+    | CalibrationFailure of questionIndex: int * errors: CalibrationError list
+    | NativeFailure of message: string
+    | Cancelled
+    | Disposed
+```
+
+Indexes are zero-based; calibration indexes flatten request order then question
+order. Model-limit errors identify the first exceeded bound. Expected artifact,
+runtime and output-contract failures become typed errors. Unexpected/fatal CLR
+failures are not swallowed; disposal failures may fault the asynchronous join.
+Callers must handle load and prediction errors independently.
+
+### Real execution versus certification
+
+Use `./build.fsx -t CheckInference` to exercise the public loader, both prediction
+methods, all question kinds and asynchronous disposal against the selected local
+cache. Missing inputs fail rather than skip. This command has passed on Linux
+ARM64 with CPU ONNX Runtime 1.29.0.
+
+Ordinary `Tests` excludes `RealInference` and needs no model bytes. Controlled
+runtime tests cover failure paths, ordering, capacity and lifecycle; actual
+mid-kernel cancellation timing and independent tokenizer/logit/probability parity
+are not established by the real smoke test. `VerifyModels` remains blocked on
+independent certification, not on the existence of this implementation.

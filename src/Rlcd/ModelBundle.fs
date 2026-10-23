@@ -3,6 +3,7 @@ namespace Rlcd
 open System
 open System.IO
 open System.Security.Cryptography
+open System.Text
 open System.Text.Json
 
 [<RequireQualifiedAccess>]
@@ -244,6 +245,9 @@ module BundleArtifact =
     /// Return the manifest-relative local path.
     let path (artifact: BundleArtifact) : string = artifact.Path
 
+    /// Return the digest required by the validated manifest.
+    let sha256 (artifact: BundleArtifact) : string = artifact.Sha256
+
     /// Verify the local regular file, size, and SHA-256.
     /// Provision an immutable directory; these checks are not a concurrent filesystem sandbox.
     let verify (modelDirectory: string) (artifact: BundleArtifact) : unit =
@@ -438,12 +442,53 @@ module private BundleContract =
             Artifacts = graph :: sidecars
         }
 
+/// Parsed added-token behavior; construction belongs to the sidecar IO boundary.
+type internal AddedTokenConfiguration =
+    {
+        Content: string
+        Identifier: int
+        Normalized: bool
+        SingleWord: bool
+        LeftStrip: bool
+        RightStrip: bool
+        Special: bool
+    }
+
+/// Immutable encoding data retained by the existing sidecar parser.
+type internal TokenizerConfiguration =
+    {
+        Vocabulary: Map<string, int>
+        MergeRanks: Map<string * string, int>
+        AddedTokens: AddedTokenConfiguration list
+        Controls: Map<string, string * int>
+    }
+
 [<RequireQualifiedAccess>]
-module private TokenizerContract =
+module internal TokenizerContract =
+    let private optional name (element: JsonElement) =
+        match element.TryGetProperty(name: string) with
+        | true, value -> Some value
+        | false, _ -> None
+
+    let private supportedFields required optional element =
+        let names = BundleJson.properties element |> List.map fst |> Set.ofList
+        BundleJson.require
+            (Set.isSubset (Set.ofList required) names
+             && Set.isSubset names (Set.ofList (required @ optional)))
+            "Missing or unsupported tokenizer properties."
+
+    let private nullValue (element: JsonElement) =
+        BundleJson.require
+            (element.ValueKind = JsonValueKind.Null)
+            "Unsupported non-null tokenizer setting."
+
+    let private optionalNull name element =
+        optional name element |> Option.iter nullValue
+
     let private identifier element =
         let value = BundleJson.integer element
         BundleJson.require (value >= 0L && value <= int64 Int32.MaxValue) "Invalid token ID."
-        value
+        int value
 
     let private distinctTokens tokens =
         let names = tokens |> List.map fst
@@ -458,18 +503,39 @@ module private TokenizerContract =
             [ "id"; "content"; "special"; "normalized"; "single_word"; "lstrip"; "rstrip" ]
             element
 
-        for flag in [ "special"; "normalized"; "single_word"; "lstrip"; "rstrip" ] do
-            element |> BundleJson.property flag |> BundleJson.boolean |> ignore
-
+        let flag name = element |> BundleJson.property name |> BundleJson.boolean
         let content = element |> BundleJson.property "content" |> BundleJson.text
         let identifier = element |> BundleJson.property "id" |> identifier
         BundleJson.require (content.Length > 0) "Added tokens must not be empty."
-        content, identifier
+        {
+            Content = content
+            Identifier = identifier
+            Normalized = flag "normalized"
+            SingleWord = flag "single_word"
+            LeftStrip = flag "lstrip"
+            RightStrip = flag "rstrip"
+            Special = flag "special"
+        }
+
+    let private bpeSettings element =
+        supportedFields [ "type"; "vocab"; "merges" ]
+            [ "dropout"; "unk_token"; "continuing_subword_prefix"; "end_of_word_suffix"
+              "fuse_unk"; "byte_fallback"; "ignore_merges" ] element
+        for name in [ "dropout"; "unk_token" ] do
+            optionalNull name element
+        for name in [ "fuse_unk"; "byte_fallback"; "ignore_merges" ] do
+            optional name element
+            |> Option.iter (fun value ->
+                BundleJson.require (not (BundleJson.boolean value)) $"Unsupported BPE {name}.")
+        for name in [ "continuing_subword_prefix"; "end_of_word_suffix" ] do
+            optional name element
+            |> Option.iter (fun value ->
+                if value.ValueKind <> JsonValueKind.Null then
+                    value |> BundleJson.exactText "")
 
     let private vocabulary element =
-        BundleJson.properties element |> ignore
+        bpeSettings element
         element |> BundleJson.property "type" |> BundleJson.exactText "BPE"
-        element |> BundleJson.property "merges" |> BundleJson.items |> ignore
 
         let tokens =
             element
@@ -480,6 +546,30 @@ module private TokenizerContract =
         BundleJson.require (not tokens.IsEmpty) "Tokenizer vocabulary must not be empty."
         distinctTokens tokens
         Map.ofList tokens
+
+    let private mergePair (element: JsonElement) =
+        let parts =
+            if element.ValueKind = JsonValueKind.String then
+                (BundleJson.text element).Split(' ') |> Array.toList
+            else
+                element |> BundleJson.items |> List.map BundleJson.text
+        match parts with
+        | [ left; right ] when left.Length > 0 && right.Length > 0 -> left, right
+        | _ -> raise (InvalidDataException "Expected a nonempty BPE merge pair.")
+
+    let private ranks vocabulary element =
+        let pairs = element |> BundleJson.items |> List.map mergePair
+        BundleJson.require
+            ((List.distinct pairs).Length = pairs.Length)
+            "Duplicate BPE merge pairs are unsupported."
+        pairs
+        |> List.mapi (fun rank (left, right) ->
+            BundleJson.require
+                ([ left; right; left + right ]
+                 |> List.forall (fun token -> Map.containsKey token vocabulary))
+                "BPE merge operands and result must exist in vocabulary."
+            (left, right), rank)
+        |> Map.ofList
 
     let private merge vocabulary added =
         distinctTokens added
@@ -500,30 +590,132 @@ module private TokenizerContract =
         let tokens, _ = List.fold insert (vocabulary, occupied) added
         tokens
 
-    let private tokens element =
-        BundleJson.properties element |> ignore
+    let private byteLevel element =
+        supportedFields [ "type"; "add_prefix_space"; "use_regex" ] [ "trim_offsets" ] element
+        element |> BundleJson.property "type" |> BundleJson.exactText "ByteLevel"
+        let prefix = element |> BundleJson.property "add_prefix_space" |> BundleJson.boolean
+        let regex = element |> BundleJson.property "use_regex" |> BundleJson.boolean
+        optional "trim_offsets" element |> Option.iter (BundleJson.boolean >> ignore)
+        BundleJson.require (not prefix && regex) "Unsupported ByteLevel tokenizer flags."
+
+    let private decoder element =
+        supportedFields [ "type"; "add_prefix_space"; "use_regex"; "trim_offsets" ] [] element
+        element |> BundleJson.property "type" |> BundleJson.exactText "ByteLevel"
+        for name in [ "add_prefix_space"; "use_regex"; "trim_offsets" ] do
+            element |> BundleJson.property name |> BundleJson.boolean |> ignore
+
+    let private templateSpecial vocabulary (name, element) =
+        BundleJson.fields [ "id"; "ids"; "tokens" ] element
+        element |> BundleJson.property "id" |> BundleJson.exactText name
+        let ids = element |> BundleJson.property "ids" |> BundleJson.items |> List.map identifier
+        let tokens =
+            element |> BundleJson.property "tokens" |> BundleJson.items |> List.map BundleJson.text
+        BundleJson.require
+            (not ids.IsEmpty && ids.Length = tokens.Length)
+            "Invalid template special token."
+        List.zip tokens ids
+        |> List.iter (fun (token, id) ->
+            BundleJson.require
+                (Map.tryFind token vocabulary = Some id)
+                "Template special token disagrees with vocabulary.")
+        name
+
+    let private templateItem specials element =
+        let kind, description =
+            match BundleJson.properties element with
+            | [ (kind, description) ] -> kind, description
+            | _ -> raise (InvalidDataException "Invalid template item.")
+        BundleJson.fields [ "id"; "type_id" ] description
+        description |> BundleJson.property "type_id" |> identifier |> ignore
+        let name = description |> BundleJson.property "id" |> BundleJson.text
+        match kind with
+        | "Sequence" -> Some name
+        | "SpecialToken" ->
+            BundleJson.require (Set.contains name specials) "Undefined template special token."
+            None
+        | _ -> raise (InvalidDataException "Unsupported template item.")
+
+    let private postProcessor vocabulary element =
+        BundleJson.fields [ "type"; "single"; "pair"; "special_tokens" ] element
+        element |> BundleJson.property "type" |> BundleJson.exactText "TemplateProcessing"
+        let specials =
+            element
+            |> BundleJson.property "special_tokens"
+            |> BundleJson.properties
+            |> List.map (templateSpecial vocabulary)
+            |> Set.ofList
+        for name, expected in [ "single", [ "A" ]; "pair", [ "A"; "B" ] ] do
+            let sequences =
+                element
+                |> BundleJson.property name
+                |> BundleJson.items
+                |> List.choose (templateItem specials)
+            BundleJson.require
+                (sequences = expected)
+                "Templates must preserve each input sequence exactly once and in order."
+
+    let private stripOverlap patterns =
+        for normalized in [ false; true ] do
+            let phase = patterns |> List.filter (fun token -> token.Normalized = normalized)
+            let strips = phase |> List.exists _.RightStrip
+            let startsWithSpace =
+                phase
+                |> List.exists (fun token -> Rune.IsWhiteSpace(Rune.GetRuneAt(token.Content, 0)))
+            BundleJson.require
+                (not (strips && startsWithSpace))
+                "Unsupported same-phase combination: rstrip and whitespace-leading added tokens."
+
+    let private addedPatterns added =
+        let patterns =
+            added
+            |> List.sortBy (fun token -> not token.Special)
+            |> List.map (fun token ->
+                if token.Normalized then
+                    { token with Content = token.Content.Normalize(NormalizationForm.FormC) }
+                else token)
+        let keys = patterns |> List.map (fun token -> token.Normalized, token.Content)
+        BundleJson.require
+            ((List.distinct keys).Length = keys.Length)
+            "Added-token patterns that collide after normalization are unsupported."
+        stripOverlap patterns
+        patterns
+
+    let private pipeline element =
+        supportedFields [ "version"; "normalizer"; "pre_tokenizer"; "model"; "added_tokens" ]
+            [ "truncation"; "padding"; "post_processor"; "decoder" ] element
+        for name in [ "truncation"; "padding" ] do
+            optionalNull name element
+        optional "decoder" element
+        |> Option.iter (fun value -> if value.ValueKind <> JsonValueKind.Null then decoder value)
         element |> BundleJson.property "version" |> BundleJson.exactText "1.0"
         let normalizer = BundleJson.property "normalizer" element
         BundleJson.fields [ "type" ] normalizer
         normalizer |> BundleJson.property "type" |> BundleJson.exactText "NFC"
-        let preTokenizer = BundleJson.property "pre_tokenizer" element
-        BundleJson.properties preTokenizer |> ignore
-        preTokenizer |> BundleJson.property "type" |> BundleJson.exactText "ByteLevel"
+        element |> BundleJson.property "pre_tokenizer" |> byteLevel
 
-        let prefix =
-            preTokenizer |> BundleJson.property "add_prefix_space" |> BundleJson.boolean
-
-        let regex = preTokenizer |> BundleJson.property "use_regex" |> BundleJson.boolean
-        BundleJson.require (not prefix && regex) "Unsupported ByteLevel tokenizer flags."
-        let vocabulary = element |> BundleJson.property "model" |> vocabulary
-        let added = element |> BundleJson.property "added_tokens" |> BundleJson.items
-        added |> List.map addedToken |> merge vocabulary
+    let private tokens element =
+        pipeline element
+        let model = BundleJson.property "model" element
+        let vocabulary = vocabulary model
+        let ranks = model |> BundleJson.property "merges" |> ranks vocabulary
+        let added =
+            element |> BundleJson.property "added_tokens" |> BundleJson.items |> List.map addedToken
+        let combined =
+            added |> List.map (fun token -> token.Content, token.Identifier) |> merge vocabulary
+        optional "post_processor" element
+        |> Option.iter (fun value ->
+            if value.ValueKind <> JsonValueKind.Null then postProcessor combined value)
+        vocabulary, ranks, addedPatterns added, combined
 
     let private controlToken (element: JsonElement) =
         match element.ValueKind with
         | JsonValueKind.String -> BundleJson.text element
         | JsonValueKind.Object ->
-            BundleJson.properties element |> ignore
+            supportedFields [ "content" ]
+                [ "__type"; "special"; "normalized"; "single_word"; "lstrip"; "rstrip" ] element
+            optional "__type" element |> Option.iter (BundleJson.exactText "AddedToken")
+            for flag in [ "special"; "normalized"; "single_word"; "lstrip"; "rstrip" ] do
+                optional flag element |> Option.iter (BundleJson.boolean >> ignore)
             element |> BundleJson.property "content" |> BundleJson.text
         | _ -> raise (InvalidDataException "Expected a special token string or descriptor.")
 
@@ -536,18 +728,31 @@ module private TokenizerContract =
                 let content = element |> BundleJson.property name |> controlToken
 
                 match Map.tryFind content vocabulary with
-                | Some identifier -> identifier
+                | Some identifier ->
+                    BundleJson.require
+                        (name <> "mask_token" || not (String.IsNullOrWhiteSpace content))
+                        "The mask token spelling must not be blank."
+                    name, (content, identifier)
                 | None -> raise (InvalidDataException $"Special token {name} has no tokenizer ID."))
 
         BundleJson.require
-            ((List.distinct identifiers).Length = 4)
+            ((identifiers |> List.map (snd >> snd) |> List.distinct).Length = 4)
             "CLS/SEP/PAD/MASK must have distinct tokenizer-derived IDs."
+        Map.ofList identifiers
 
-    let verify configurationPath tokenizerPath =
+    let read configurationPath tokenizerPath =
         use tokenizerDocument = BundleDocument.read 67108864L tokenizerPath
         use configurationDocument = BundleDocument.read 67108864L configurationPath
-        let vocabulary = tokens tokenizerDocument.RootElement
-        controls vocabulary configurationDocument.RootElement
+        let vocabulary, ranks, added, combined = tokens tokenizerDocument.RootElement
+        {
+            Vocabulary = vocabulary
+            MergeRanks = ranks
+            AddedTokens = added
+            Controls = controls combined configurationDocument.RootElement
+        }
+
+    let verify configurationPath tokenizerPath =
+        read configurationPath tokenizerPath |> ignore
 
 /// The pinned, local-only laya-decision-v1 artifact boundary.
 [<RequireQualifiedAccess>]
@@ -560,11 +765,8 @@ module ModelBundle =
     /// Return the graph and three required sidecars in verification order.
     let artifacts (manifest: BundleManifest) : BundleArtifact list = manifest.Artifacts
 
-    /// Verify sidecar integrity and supported configuration only, not the graph or native runtime.
-    let verifySidecars (modelDirectory: string) (manifest: BundleManifest) : AgentConfiguration =
+    let private readSidecars modelDirectory (manifest: BundleManifest) =
         let sidecars = List.tail manifest.Artifacts
-        sidecars |> List.iter (BundleArtifact.verify modelDirectory)
-
         let paths =
             sidecars
             |> List.map (fun artifact -> BundlePath.resolve modelDirectory artifact.Path)
@@ -572,14 +774,23 @@ module ModelBundle =
         TokenizerContract.verify paths[1] paths[0]
         AgentConfiguration.read paths[2]
 
-    /// Verify all artifacts and their supported configuration, not native execution.
-    let verify (modelDirectory: string) (manifest: BundleManifest) : BundleVerification =
-        let graph = List.head manifest.Artifacts
-        graph |> BundleArtifact.verify modelDirectory
-        manifest |> verifySidecars modelDirectory |> ignore
-
+    // Allows the inference loader to retain parsed tokenizer/configuration data rather than
+    // parsing and discarding it here, then parsing the same sidecars a second time.
+    let internal verifyArtifacts modelDirectory (manifest: BundleManifest) =
+        manifest.Artifacts |> List.iter (BundleArtifact.verify modelDirectory)
         {
             BundleId = manifest.BundleId
-            GraphPath = BundlePath.resolve modelDirectory graph.Path
+            GraphPath = BundlePath.resolve modelDirectory (List.head manifest.Artifacts).Path
             IsNativeCertified = false
         }
+
+    /// Verify sidecar integrity and supported configuration only, not the graph or native runtime.
+    let verifySidecars (modelDirectory: string) (manifest: BundleManifest) : AgentConfiguration =
+        List.tail manifest.Artifacts |> List.iter (BundleArtifact.verify modelDirectory)
+        readSidecars modelDirectory manifest
+
+    /// Verify all artifacts and their supported configuration, not native execution.
+    let verify (modelDirectory: string) (manifest: BundleManifest) : BundleVerification =
+        let verified = verifyArtifacts modelDirectory manifest
+        readSidecars modelDirectory manifest |> ignore
+        verified
